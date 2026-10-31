@@ -4,7 +4,7 @@ import { GitForm } from './components/GitForm';
 import { ResultSection } from './components/ResultSection';
 import { TokenModal } from './components/TokenModal';
 import { SparkleRed, SparkleGreen } from './components/Sparkles';
-import { performIngest, checkServerTokenStatus, getOwnerPin } from './services/ingest';
+import { performIngest, checkServerTokenStatus, getOwnerPin, isLockEnabled } from './services/ingest';
 import { IngestRequest, IngestResponse, TokenStatus } from './types';
 import { Lock } from 'lucide-react';
 
@@ -27,8 +27,9 @@ export default function App() {
   const refreshTokens = async () => {
     const status = await checkServerTokenStatus();
     setTokenStatus(status);
-    const pin = getOwnerPin();
-    if (pin && !sessionStorage.getItem('gitingest_unlocked')) {
+    const lockActive = isLockEnabled();
+    const isUnlocked = sessionStorage.getItem('gitingest_unlocked') === 'true';
+    if (lockActive && !isUnlocked) {
       setIsLocked(true);
     } else {
       setIsLocked(false);
@@ -42,7 +43,8 @@ export default function App() {
   const handleUnlock = (e: React.FormEvent) => {
     e.preventDefault();
     const pin = getOwnerPin();
-    if (unlockPin === pin || unlockPin.toLowerCase() === 'honeypie3301') {
+    const input = unlockPin.trim();
+    if ((pin && input === pin) || input.toLowerCase() === 'honeypie3301') {
       sessionStorage.setItem('gitingest_unlocked', 'true');
       setIsLocked(false);
       setUnlockError(false);

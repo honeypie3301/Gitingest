@@ -67,6 +67,26 @@ export function savePatterns(type: 'exclude' | 'include', pattern: string, maxFi
   }
 }
 
+const LOCK_ENABLED_KEY = 'gitingest_lock_enabled';
+
+export function isLockEnabled(): boolean {
+  try {
+    const val = localStorage.getItem(LOCK_ENABLED_KEY);
+    // Defaults to true: Protect personal instance from unauthorized visitors on any device
+    return val === null ? true : val === 'true';
+  } catch {
+    return true;
+  }
+}
+
+export function setLockEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(LOCK_ENABLED_KEY, enabled ? 'true' : 'false');
+  } catch (e) {
+    console.error('Failed to save lock enabled setting', e);
+  }
+}
+
 export function getOwnerPin(): string {
   try {
     return localStorage.getItem(OWNER_PIN_KEY) || '';

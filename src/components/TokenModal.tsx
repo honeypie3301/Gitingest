@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Key, CheckCircle, AlertCircle, X, Shield, ExternalLink, RefreshCw, Lock, Unlock, UserCheck } from 'lucide-react';
 import { verifyGitHubToken } from '../services/githubApi';
-import { getSavedToken, setSavedToken, getAutoInjectToken, setAutoInjectToken, getOwnerPin, setOwnerPin } from '../services/ingest';
+import { getSavedToken, setSavedToken, getAutoInjectToken, setAutoInjectToken, getOwnerPin, setOwnerPin, isLockEnabled, setLockEnabled } from '../services/ingest';
 import { GitHubUser } from '../types';
 
 interface TokenModalProps {
@@ -14,6 +14,7 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
   const [tokenInput, setTokenInput] = useState('');
   const [autoInject, setAutoInject] = useState(true);
   const [pinInput, setPinInput] = useState('');
+  const [lockActive, setLockActive] = useState(true);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifiedUser, setVerifiedUser] = useState<GitHubUser | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
@@ -25,6 +26,7 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
       setTokenInput(current);
       setAutoInject(getAutoInjectToken());
       setPinInput(getOwnerPin());
+      setLockActive(isLockEnabled());
       if (current) {
         verify(current);
       }
@@ -59,6 +61,7 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
     setSavedToken(tokenInput.trim());
     setAutoInjectToken(autoInject);
     setOwnerPin(pinInput.trim());
+    setLockEnabled(lockActive);
     onTokenUpdated();
     onClose();
   };
@@ -226,37 +229,50 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
                   <div>
                     <span className="font-bold text-white">Block anyone who isn&apos;t you:</span>
                     <p className="mt-1">
-                      Set a master secret PIN or passphrase. When active, visitors must enter this PIN to unlock the interface and access private repositories.
+                      Enforce passcode protection across all devices. Any device or visitor must enter the owner passcode to access the instance.
                     </p>
                   </div>
                 </div>
               </div>
 
+              <div className="flex items-center justify-between p-3.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg">
+                <div>
+                  <span className="text-xs font-bold text-white block">Enforce Passcode Lock (All Devices)</span>
+                  <span className="text-[11px] text-gray-400">Lock out unauthorized visitors and other devices</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={lockActive}
+                  onChange={(e) => setLockActive(e.target.checked)}
+                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                />
+              </div>
+
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                  Owner Passcode / Master PIN (Optional)
+                  Custom Owner PIN / Passphrase (Optional)
                 </label>
                 <input
                   type="password"
                   value={pinInput}
                   onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="Enter secret PIN to lock out other visitors"
+                  placeholder="Enter custom PIN (default: honeypie3301)"
                   className="w-full px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg font-mono text-sm focus:outline-none focus:border-amber-400 text-white placeholder-gray-500"
                 />
                 <p className="text-[11px] text-gray-400 mt-1.5">
-                  Leave empty if you do not wish to require a passcode in this browser.
+                  Master fallback passcode is <code className="text-amber-400 font-mono">honeypie3301</code>. You can set an additional custom PIN here.
                 </p>
               </div>
 
-              {pinInput ? (
+              {lockActive ? (
                 <div className="p-3 bg-amber-950/40 border-2 border-amber-600/60 rounded-lg text-amber-200 text-xs flex items-center gap-2">
                   <Lock className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>Owner Lock is enabled. Only visitors with this PIN can unlock the app.</span>
+                  <span>Owner Lock is active. Testing from another device or incognito will require the passcode.</span>
                 </div>
               ) : (
                 <div className="p-3 bg-gray-800/60 border-2 border-gray-700 rounded-lg text-gray-300 text-xs flex items-center gap-2">
                   <Unlock className="w-4 h-4 text-gray-400 shrink-0" />
-                  <span>Owner Lock is disabled (free access).</span>
+                  <span>Owner Lock is disabled (open public access).</span>
                 </div>
               )}
             </div>
