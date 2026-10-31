@@ -59,9 +59,9 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
 
   const handleSave = () => {
     setSavedToken(tokenInput.trim());
-    setAutoInjectToken(autoInject);
-    setOwnerPin(pinInput.trim());
-    setLockEnabled(lockActive);
+    const trimmedPin = pinInput.trim();
+    setOwnerPin(trimmedPin);
+    setLockEnabled(lockActive && Boolean(trimmedPin));
     onTokenUpdated();
     onClose();
   };

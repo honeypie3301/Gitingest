@@ -71,11 +71,24 @@ const LOCK_ENABLED_KEY = 'gitingest_lock_enabled';
 
 export function isLockEnabled(): boolean {
   try {
+    const pin = getOwnerPin();
+    if (!pin) {
+      return false;
+    }
     const val = localStorage.getItem(LOCK_ENABLED_KEY);
-    // Defaults to true: Protect personal instance from unauthorized visitors on any device
-    return val === null ? true : val === 'true';
+    return val === 'true';
   } catch {
-    return true;
+    return false;
+  }
+}
+
+export function resetOwnerLock(): void {
+  try {
+    localStorage.removeItem(OWNER_PIN_KEY);
+    localStorage.setItem(LOCK_ENABLED_KEY, 'false');
+    sessionStorage.setItem('gitingest_unlocked', 'true');
+  } catch (e) {
+    console.error('Failed to reset owner lock', e);
   }
 }
 
