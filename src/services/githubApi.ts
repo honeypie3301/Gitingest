@@ -21,6 +21,8 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
     if (!res.ok) return null;
     const data = await res.json();
     return {
+      id: data.id,
+      node_id: data.node_id,
       login: data.login,
       avatar_url: data.avatar_url,
       name: data.name,
@@ -257,18 +259,30 @@ export async function ingestViaGitHubApi(
         let totalChars = 0;
         let filesAnalyzed = 0;
 
-        for (const { relPath, zipObject } of fileEntries) {
-          try {
-            const content = await zipObject.async('string');
-            if (content.length > maxBytes || content.includes('\0')) continue;
+        const ZIP_CHUNK = 50;
+        for (let i = 0; i < fileEntries.length; i += ZIP_CHUNK) {
+          if (signal?.aborted) break;
+          const chunk = fileEntries.slice(i, i + ZIP_CHUNK);
+          const chunkResults = await Promise.all(
+            chunk.map(async ({ relPath, zipObject }) => {
+              try {
+                const content = await zipObject.async('string');
+                if (content.length > maxBytes || content.includes('\0')) return null;
+                return { relPath, content, len: content.length };
+              } catch {
+                return null;
+              }
+            })
+          );
 
-            totalChars += content.length;
-            filesAnalyzed++;
-            fileContents.push(
-              `================================================\nFile: ${relPath}\n================================================\n${content}\n`
-            );
-          } catch {
-            // skip
+          for (const item of chunkResults) {
+            if (item) {
+              totalChars += item.len;
+              filesAnalyzed++;
+              fileContents.push(
+                `================================================\nFile: ${item.relPath}\n================================================\n${item.content}\n`
+              );
+            }
           }
         }
 

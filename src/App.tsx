@@ -4,9 +4,21 @@ import { GitForm } from './components/GitForm';
 import { ResultSection } from './components/ResultSection';
 import { TokenModal } from './components/TokenModal';
 import { SparkleRed, SparkleGreen } from './components/Sparkles';
-import { performIngest, checkServerTokenStatus, getOwnerPin, isLockEnabled, resetOwnerLock } from './services/ingest';
+import {
+  performIngest,
+  checkServerTokenStatus,
+  getSavedToken,
+  setSavedToken,
+  isVerifiedOwner,
+  verifyBackupKey,
+  isSessionUnlocked,
+  setSessionUnlocked,
+  OWNER_GITHUB_LOGIN,
+  OWNER_GITHUB_ID,
+} from './services/ingest';
+import { verifyGitHubToken } from './services/githubApi';
 import { IngestRequest, IngestResponse, TokenStatus } from './types';
-import { Lock } from 'lucide-react';
+import { Lock, ShieldCheck, Key, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function App() {
   const [result, setResult] = useState<IngestResponse | null>(null);
@@ -19,50 +31,105 @@ export default function App() {
   });
 
   const [isLocked, setIsLocked] = useState(false);
-  const [unlockPin, setUnlockPin] = useState('');
-  const [unlockError, setUnlockError] = useState(false);
+  const [authInput, setAuthInput] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isVerifyingAuth, setIsVerifyingAuth] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const refreshTokens = async () => {
     const status = await checkServerTokenStatus();
     setTokenStatus(status);
-    const pin = getOwnerPin();
-    const lockActive = isLockEnabled();
-    const isUnlocked = sessionStorage.getItem('gitingest_unlocked') === 'true';
-    if (lockActive && pin && !isUnlocked) {
-      setIsLocked(true);
-    } else {
+
+    if (isSessionUnlocked()) {
       setIsLocked(false);
+      return;
     }
+
+    if (status.user && isVerifiedOwner(status.user)) {
+      setSessionUnlocked(true);
+      setIsLocked(false);
+      return;
+    }
+
+    const savedPat = getSavedToken();
+    if (savedPat) {
+      try {
+        const user = await verifyGitHubToken(savedPat);
+        if (user && isVerifiedOwner(user)) {
+          setSessionUnlocked(true);
+          setIsLocked(false);
+          setTokenStatus({
+            configured: true,
+            source: 'saved_pat',
+            user,
+          });
+          return;
+        }
+      } catch {
+        // Fall through to lock
+      }
+    }
+
+    setIsLocked(true);
   };
 
   useEffect(() => {
     refreshTokens();
   }, []);
 
-  const handleUnlock = (e: React.FormEvent) => {
+  const handleUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
-    const pin = getOwnerPin();
-    const input = unlockPin.trim();
-    if (!pin || (pin && input === pin) || input.toLowerCase() === 'honeypie3301') {
-      sessionStorage.setItem('gitingest_unlocked', 'true');
+    const input = authInput.trim();
+    if (!input) return;
+
+    setAuthError(null);
+    setIsVerifyingAuth(true);
+
+    try {
+      // 1. Check if backup key was entered
+      if (verifyBackupKey(input)) {
+        setSessionUnlocked(true);
+        setIsLocked(false);
+        setAuthError(null);
+        setAuthInput('');
+        return;
+      }
+
+      // 2. Otherwise verify as GitHub Personal Access Token
+      const user = await verifyGitHubToken(input);
+      if (!user) {
+        setAuthError('Invalid GitHub token or failed to verify. You can also enter your backup key.');
+        return;
+      }
+
+      if (!isVerifiedOwner(user)) {
+        setAuthError(
+          `Unauthorized: Signed in as @${user.login} (ID: ${user.id ?? 'unknown'}). This instance is strictly restricted to @${OWNER_GITHUB_LOGIN} (ID: ${OWNER_GITHUB_ID}).`
+        );
+        return;
+      }
+
+      // Validated as owner
+      setSavedToken(input);
+      setSessionUnlocked(true);
       setIsLocked(false);
-      setUnlockError(false);
-    } else {
-      setUnlockError(true);
+      setAuthError(null);
+      setAuthInput('');
+      setTokenStatus({
+        configured: true,
+        source: 'saved_pat',
+        user,
+      });
+    } catch {
+      setAuthError('Network error while verifying GitHub account. Please try again or use the backup key.');
+    } finally {
+      setIsVerifyingAuth(false);
     }
   };
 
-  const handleResetLock = () => {
-    resetOwnerLock();
-    setIsLocked(false);
-    setUnlockError(false);
-    setUnlockPin('');
-  };
-
   const handleManualLock = () => {
-    sessionStorage.removeItem('gitingest_unlocked');
+    setSessionUnlocked(false);
     setIsLocked(true);
   };
 
@@ -128,48 +195,56 @@ export default function App() {
               <div className="w-full h-full absolute inset-0 bg-black rounded-2xl translate-y-2 translate-x-2"></div>
               <div className="relative z-10 bg-[#161b22] border-[3px] border-[#30363d] rounded-2xl p-6 sm:p-8 text-center space-y-6">
                 <div className="w-14 h-14 mx-auto rounded-full bg-amber-500/20 border-2 border-amber-500/50 flex items-center justify-center">
-                  <Lock className="w-7 h-7 text-amber-400" />
+                  <ShieldCheck className="w-7 h-7 text-amber-400" />
                 </div>
                 <div>
                   <h2 className="text-xl sm:text-2xl font-extrabold text-white">Owner Access Restricted</h2>
-                  <p className="text-xs text-gray-400 mt-1">
-                    This GitIngest instance is protected. Enter your passcode to unlock.
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    This personal instance is restricted to <span className="text-amber-400 font-bold">@{OWNER_GITHUB_LOGIN}</span> (ID: <span className="font-mono text-gray-300">{OWNER_GITHUB_ID}</span>).
                   </p>
                 </div>
 
                 <form onSubmit={handleUnlock} className="space-y-4">
                   <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-300 mb-1.5 text-left">
+                      GitHub PAT or Emergency Backup Key
+                    </label>
                     <input
                       type="password"
-                      value={unlockPin}
-                      onChange={(e) => setUnlockPin(e.target.value)}
-                      placeholder="Enter Owner Passcode..."
+                      value={authInput}
+                      onChange={(e) => setAuthInput(e.target.value)}
+                      placeholder="ghp_... or emergency backup key"
                       required
-                      className="w-full px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] focus:border-amber-400 rounded-lg text-white font-mono text-center text-sm focus:outline-none"
+                      className="w-full px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] focus:border-amber-400 rounded-lg text-white font-mono text-sm focus:outline-none placeholder-gray-500"
                     />
                   </div>
 
-                  {unlockError && (
-                    <p className="text-xs text-red-400 font-semibold">
-                      Invalid passcode. Access denied.
-                    </p>
+                  {authError && (
+                    <div className="p-3 bg-red-950/40 border-2 border-red-700/60 rounded-lg text-red-300 text-xs text-left leading-relaxed">
+                      {authError}
+                    </div>
                   )}
 
                   <button
                     type="submit"
-                    className="w-full py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 border-2 border-amber-600 text-gray-950 font-extrabold text-sm transition-transform cursor-pointer shadow-[2px_2px_0_0_#000000]"
+                    disabled={isVerifyingAuth}
+                    className="w-full py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 border-2 border-amber-600 text-gray-950 font-extrabold text-sm transition-transform cursor-pointer shadow-[2px_2px_0_0_#000000] flex items-center justify-center gap-2 disabled:opacity-50"
                   >
-                    Unlock Instance
+                    {isVerifyingAuth ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Verifying with GitHub...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-4 h-4" />
+                        <span>Verify & Unlock</span>
+                      </>
+                    )}
                   </button>
 
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={handleResetLock}
-                      className="text-xs text-gray-400 hover:text-amber-400 underline underline-offset-4 cursor-pointer transition-colors"
-                    >
-                      Forgot passcode? Reset lock & unlock
-                    </button>
+                  <div className="pt-2 text-[11px] text-gray-400 leading-normal text-left bg-[#0d1117] p-2.5 rounded-lg border border-[#30363d]">
+                    <span className="font-bold text-gray-200">Security note:</span> Authenticating verifies your GitHub username and unique permanent ID (<code className="text-amber-400">84184414</code>). If offline, enter your emergency backup key.
                   </div>
                 </form>
               </div>
@@ -229,14 +304,14 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4 text-xs font-bold text-gray-400">
-            {getOwnerPin() && !isLocked && (
+            {!isLocked && (
               <button
                 onClick={handleManualLock}
                 className="hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer text-amber-400/90"
-                title="Lock this session to test security"
+                title="Lock this session"
               >
                 <Lock className="w-3.5 h-3.5" />
-                <span>Lock Now</span>
+                <span>Lock Session</span>
               </button>
             )}
 

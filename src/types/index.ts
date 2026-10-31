@@ -20,6 +20,8 @@ export interface IngestResponse {
 }
 
 export interface GitHubUser {
+  id?: number;
+  node_id?: string;
   login: string;
   avatar_url: string;
   name?: string;

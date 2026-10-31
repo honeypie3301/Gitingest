@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Key, CheckCircle, AlertCircle, X, Shield, ExternalLink, RefreshCw, Lock, Unlock, UserCheck } from 'lucide-react';
+import { Key, CheckCircle, AlertCircle, X, Shield, ExternalLink, RefreshCw, Lock, Unlock, UserCheck, ShieldCheck } from 'lucide-react';
 import { verifyGitHubToken } from '../services/githubApi';
-import { getSavedToken, setSavedToken, getAutoInjectToken, setAutoInjectToken, getOwnerPin, setOwnerPin, isLockEnabled, setLockEnabled } from '../services/ingest';
+import {
+  getSavedToken,
+  setSavedToken,
+  getAutoInjectToken,
+  setAutoInjectToken,
+  OWNER_GITHUB_LOGIN,
+  OWNER_GITHUB_ID,
+  OWNER_BACKUP_KEY,
+  isVerifiedOwner,
+} from '../services/ingest';
 import { GitHubUser } from '../types';
 
 interface TokenModalProps {
@@ -13,8 +22,6 @@ interface TokenModalProps {
 export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onTokenUpdated }) => {
   const [tokenInput, setTokenInput] = useState('');
   const [autoInject, setAutoInject] = useState(true);
-  const [pinInput, setPinInput] = useState('');
-  const [lockActive, setLockActive] = useState(true);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifiedUser, setVerifiedUser] = useState<GitHubUser | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
@@ -25,8 +32,6 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
       const current = getSavedToken();
       setTokenInput(current);
       setAutoInject(getAutoInjectToken());
-      setPinInput(getOwnerPin());
-      setLockActive(isLockEnabled());
       if (current) {
         verify(current);
       }
@@ -59,9 +64,7 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
 
   const handleSave = () => {
     setSavedToken(tokenInput.trim());
-    const trimmedPin = pinInput.trim();
-    setOwnerPin(trimmedPin);
-    setLockEnabled(lockActive && Boolean(trimmedPin));
+    setAutoInjectToken(autoInject);
     onTokenUpdated();
     onClose();
   };
@@ -121,8 +124,8 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
                   : 'border-transparent text-gray-400 hover:text-gray-200'
               }`}
             >
-              <Shield className="w-3.5 h-3.5" />
-              <span>Owner Lock (Block Others)</span>
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Owner Account & Backup</span>
             </button>
           </div>
 
@@ -183,7 +186,9 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
                       <CheckCircle className="w-4 h-4 text-emerald-400" />
                       <span>Authenticated as @{verifiedUser.login}</span>
                     </div>
-                    <span className="text-emerald-400">Private repository access active</span>
+                    <span className="text-emerald-400">
+                      {isVerifiedOwner(verifiedUser) ? 'Verified Owner Account' : 'External GitHub Account'}
+                    </span>
                   </div>
                 </div>
               )}
@@ -221,60 +226,44 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
               </div>
             </div>
           ) : (
-            /* Owner Lock Tab */
+            /* Owner Lock & Backup Tab */
             <div className="space-y-4">
               <div className="text-xs leading-relaxed bg-[#0d1117] p-3.5 rounded-lg border-2 border-[#30363d] text-gray-300">
                 <div className="flex items-start gap-2">
-                  <Lock className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                  <ShieldCheck className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-bold text-white">Block anyone who isn&apos;t you:</span>
+                    <span className="font-bold text-white">Owner Account Restriction</span>
                     <p className="mt-1">
-                      Enforce passcode protection across all devices. Any device or visitor must enter the owner passcode to access the instance.
+                      This instance strictly permits access exclusively to your GitHub account:{' '}
+                      <span className="text-amber-400 font-bold">@{OWNER_GITHUB_LOGIN}</span>.
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between p-3.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg">
-                <div>
-                  <span className="text-xs font-bold text-white block">Enforce Passcode Lock (All Devices)</span>
-                  <span className="text-[11px] text-gray-400">Lock out unauthorized visitors and other devices</span>
+              <div className="p-3.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg space-y-2 text-xs">
+                <div className="flex items-center justify-between text-gray-300">
+                  <span className="font-semibold text-gray-400">Authorized GitHub Username:</span>
+                  <span className="font-mono text-amber-400 font-bold">@{OWNER_GITHUB_LOGIN}</span>
                 </div>
-                <input
-                  type="checkbox"
-                  checked={lockActive}
-                  onChange={(e) => setLockActive(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                />
+                <div className="flex items-center justify-between text-gray-300">
+                  <span className="font-semibold text-gray-400">Immutable Account ID:</span>
+                  <span className="font-mono text-white">{OWNER_GITHUB_ID}</span>
+                </div>
+                <div className="text-[11px] text-gray-400 pt-1 border-t border-[#21262d]">
+                  Verification checks your immutable numerical GitHub ID (<code className="text-amber-400">84184414</code>) so no other user with the same username can access your app.
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                  Custom Owner PIN / Passphrase (Optional)
-                </label>
-                <input
-                  type="password"
-                  value={pinInput}
-                  onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="Enter custom PIN (default: honeypie3301)"
-                  className="w-full px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg font-mono text-sm focus:outline-none focus:border-amber-400 text-white placeholder-gray-500"
-                />
-                <p className="text-[11px] text-gray-400 mt-1.5">
-                  Master fallback passcode is <code className="text-amber-400 font-mono">honeypie3301</code>. You can set an additional custom PIN here.
+              <div className="p-3.5 bg-amber-950/20 border-2 border-amber-600/40 rounded-lg text-xs space-y-1.5">
+                <span className="font-bold text-amber-300 block">Emergency Backup Key</span>
+                <p className="text-gray-300 text-[11px]">
+                  If you are on an external device without a GitHub PAT or GitHub API is unreachable:
                 </p>
+                <div className="p-2 bg-[#0d1117] border border-[#30363d] rounded font-mono text-xs text-amber-400 select-all">
+                  {OWNER_BACKUP_KEY}
+                </div>
               </div>
-
-              {lockActive ? (
-                <div className="p-3 bg-amber-950/40 border-2 border-amber-600/60 rounded-lg text-amber-200 text-xs flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>Owner Lock is active. Testing from another device or incognito will require the passcode.</span>
-                </div>
-              ) : (
-                <div className="p-3 bg-gray-800/60 border-2 border-gray-700 rounded-lg text-gray-300 text-xs flex items-center gap-2">
-                  <Unlock className="w-4 h-4 text-gray-400 shrink-0" />
-                  <span>Owner Lock is disabled (open public access).</span>
-                </div>
-              )}
             </div>
           )}
 

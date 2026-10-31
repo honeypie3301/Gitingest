@@ -59,6 +59,8 @@ app.get('/api/user-status', async (_req, res) => {
       return res.json({
         configured: true,
         user: {
+          id: data.id,
+          node_id: data.node_id,
           login: data.login,
           avatar_url: data.avatar_url,
           name: data.name,
@@ -199,17 +201,29 @@ app.post('/api/ingest', async (req, res) => {
         const fileContents: string[] = [];
         let totalChars = 0;
 
-        for (const { relPath, obj } of fileEntries) {
+        const ZIP_CHUNK = 50;
+        for (let i = 0; i < fileEntries.length; i += ZIP_CHUNK) {
           if (clientDisconnected) return;
-          try {
-            const content = await obj.async('string');
-            if (content.length > maxBytes || content.includes('\0')) continue;
-            totalChars += content.length;
-            fileContents.push(
-              `================================================\nFile: ${relPath}\n================================================\n${content}\n`
-            );
-          } catch {
-            // skip
+          const chunk = fileEntries.slice(i, i + ZIP_CHUNK);
+          const chunkResults = await Promise.all(
+            chunk.map(async ({ relPath, obj }) => {
+              try {
+                const content = await obj.async('string');
+                if (content.length > maxBytes || content.includes('\0')) return null;
+                return { relPath, content, len: content.length };
+              } catch {
+                return null;
+              }
+            })
+          );
+
+          for (const item of chunkResults) {
+            if (item) {
+              totalChars += item.len;
+              fileContents.push(
+                `================================================\nFile: ${item.relPath}\n================================================\n${item.content}\n`
+              );
+            }
           }
         }
 

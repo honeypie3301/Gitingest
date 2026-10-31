@@ -1,4 +1,4 @@
-import { IngestRequest, IngestResponse, TokenStatus } from '../types';
+import { IngestRequest, IngestResponse, TokenStatus, GitHubUser } from '../types';
 import { ingestViaGitHubApi } from './githubApi';
 
 const SAVED_PAT_KEY = 'gitingest_custom_pat';
@@ -67,58 +67,73 @@ export function savePatterns(type: 'exclude' | 'include', pattern: string, maxFi
   }
 }
 
-const LOCK_ENABLED_KEY = 'gitingest_lock_enabled';
+export const OWNER_GITHUB_LOGIN = 'honeypie3301';
+export const OWNER_GITHUB_ID = 84184414;
+export const OWNER_NODE_ID = 'MDQ6VXNlcjg0MTg0NDE0';
+export const OWNER_BACKUP_KEY = 'honeypie3301-84184414';
 
-export function isLockEnabled(): boolean {
+export function isVerifiedOwner(user: GitHubUser | null | undefined): boolean {
+  if (!user || !user.login) return false;
+  const loginMatch = user.login.toLowerCase() === OWNER_GITHUB_LOGIN.toLowerCase();
+  if (!loginMatch) return false;
+  // Backup verification: prevent username collisions or spoofing by verifying immutable GitHub user ID
+  if (user.id !== undefined && user.id !== OWNER_GITHUB_ID) {
+    return false;
+  }
+  if (user.node_id && user.node_id !== OWNER_NODE_ID) {
+    return false;
+  }
+  return true;
+}
+
+export function verifyBackupKey(input: string): boolean {
+  const clean = input.trim();
+  if (!clean) return false;
+  return (
+    clean === OWNER_BACKUP_KEY ||
+    clean.toLowerCase() === OWNER_GITHUB_LOGIN.toLowerCase() ||
+    clean === String(OWNER_GITHUB_ID)
+  );
+}
+
+const UNLOCKED_SESSION_KEY = 'gitingest_owner_unlocked';
+
+export function isSessionUnlocked(): boolean {
   try {
-    const pin = getOwnerPin();
-    if (!pin) {
-      return false;
-    }
-    const val = localStorage.getItem(LOCK_ENABLED_KEY);
-    return val === 'true';
+    return sessionStorage.getItem(UNLOCKED_SESSION_KEY) === 'true';
   } catch {
     return false;
   }
 }
 
-export function resetOwnerLock(): void {
+export function setSessionUnlocked(unlocked: boolean): void {
   try {
-    localStorage.removeItem(OWNER_PIN_KEY);
-    localStorage.setItem(LOCK_ENABLED_KEY, 'false');
-    sessionStorage.setItem('gitingest_unlocked', 'true');
-  } catch (e) {
-    console.error('Failed to reset owner lock', e);
-  }
-}
-
-export function setLockEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(LOCK_ENABLED_KEY, enabled ? 'true' : 'false');
-  } catch (e) {
-    console.error('Failed to save lock enabled setting', e);
-  }
-}
-
-export function getOwnerPin(): string {
-  try {
-    return localStorage.getItem(OWNER_PIN_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-export function setOwnerPin(pin: string): void {
-  try {
-    if (pin) {
-      localStorage.setItem(OWNER_PIN_KEY, pin);
+    if (unlocked) {
+      sessionStorage.setItem(UNLOCKED_SESSION_KEY, 'true');
     } else {
-      localStorage.removeItem(OWNER_PIN_KEY);
+      sessionStorage.removeItem(UNLOCKED_SESSION_KEY);
     }
   } catch (e) {
-    console.error('Failed to save owner pin', e);
+    console.error('Failed to update session unlock state', e);
   }
 }
+
+// Backward compatibility helpers
+export function isLockEnabled(): boolean {
+  return true;
+}
+
+export function resetOwnerLock(): void {
+  setSessionUnlocked(false);
+}
+
+export function setLockEnabled(_enabled: boolean): void {}
+
+export function getOwnerPin(): string {
+  return OWNER_GITHUB_LOGIN;
+}
+
+export function setOwnerPin(_pin: string): void {}
 
 /**
  * Fetch token and user status from server.
