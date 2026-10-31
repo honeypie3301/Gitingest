@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { GitForm } from './components/GitForm';
 import { ResultSection } from './components/ResultSection';
@@ -21,6 +21,8 @@ export default function App() {
   const [isLocked, setIsLocked] = useState(false);
   const [unlockPin, setUnlockPin] = useState('');
   const [unlockError, setUnlockError] = useState(false);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const refreshTokens = async () => {
     const status = await checkServerTokenStatus();
@@ -54,26 +56,45 @@ export default function App() {
     setIsLocked(true);
   };
 
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  };
+
   const handleIngest = async (req: IngestRequest) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     setIsLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      const data = await performIngest(req);
+      const data = await performIngest(req, abortController.signal);
       if (data.error) {
         setError(data.error);
       } else {
         setResult(data);
       }
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred while ingesting the repository.');
+      if (err.name === 'AbortError' || abortController.signal.aborted || err.message?.includes('cancelled')) {
+        setError('Ingestion was cancelled.');
+      } else {
+        setError(err.message || 'An unexpected error occurred while ingesting the repository.');
+      }
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   };
 
   const handleReset = () => {
+    handleCancel();
     setResult(null);
     setError(null);
     setIsLoading(false);
@@ -162,10 +183,16 @@ export default function App() {
               isLoading={isLoading}
               tokenStatus={tokenStatus}
               onOpenTokenModal={() => setIsTokenModalOpen(true)}
+              onCancel={handleCancel}
             />
 
             {/* Result Area */}
-            <ResultSection result={result} error={error} isLoading={isLoading} />
+            <ResultSection
+              result={result}
+              error={error}
+              isLoading={isLoading}
+              onCancel={handleCancel}
+            />
           </main>
         )}
       </div>

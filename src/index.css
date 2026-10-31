@@ -83,3 +83,10 @@
 .brutal-shadow-amber {
   box-shadow: 4px 4px 0 0 #b45309;
 }
+
+/* Prevent any boxes or textareas from being resizable or draggable */
+textarea,
+.resize-none {
+  resize: none !important;
+}
+

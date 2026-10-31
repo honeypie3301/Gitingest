@@ -156,7 +156,8 @@ function buildAsciiTree(rootName: string, paths: string[]): string {
  */
 export async function ingestViaGitHubApi(
   req: IngestRequest,
-  token?: string
+  token?: string,
+  signal?: AbortSignal
 ): Promise<IngestResponse> {
   const parsed = parseGitHubUrl(req.input_text);
   if (!parsed) {
@@ -174,9 +175,9 @@ export async function ingestViaGitHubApi(
   }
 
   // 1. Get repo default branch
-  let branch = parsed.branch;
+  let branch: string = parsed.branch || '';
   if (!branch) {
-    const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
+    const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal });
     if (!repoRes.ok) {
       if (repoRes.status === 404) {
         throw new Error(
@@ -298,12 +299,13 @@ export async function ingestViaGitHubApi(
     console.warn('Zipball fetch failed (likely browser CORS redirect). Falling back to REST tree + raw contents...', zipErr);
   }
 
-  // Strategy 2: Browser CORS-safe REST Git Tree + raw.githubusercontent.com
+  // Strategy 2: Browser CORS-safe REST Git Tree + GitHub Git Blobs / raw
   const treeRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
-    { headers }
+    { headers, signal }
   );
   if (!treeRes.ok) {
+    if (signal?.aborted) throw new DOMException('Ingestion cancelled by user', 'AbortError');
     throw new Error(`Failed to fetch file tree for "${owner}/${repo}" (${treeRes.status}).`);
   }
   const treeData = await treeRes.json();
@@ -323,28 +325,97 @@ export async function ingestViaGitHubApi(
     .map((item) => item.path);
   const treeText = buildAsciiTree(parsed.subpath || repo, treePaths);
 
-  const CONCURRENCY = 20;
+  const CONCURRENCY = 30;
   const fileContents: string[] = [];
   let totalChars = 0;
 
+  // Multi-tier fetcher: handles both private repos (with PAT via GitHub Blobs API)
+  // and public repos (via raw.githubusercontent.com without preflight)
+  const fetchSingleFileContent = async (file: { path: string; sha: string; size?: number }): Promise<{ path: string; text: string } | null> => {
+    if (signal?.aborted) return null;
+
+    // 1. If PAT is present (required for private repos like Backwoods-Test), query GitHub Git Blobs API
+    if (activeToken) {
+      try {
+        const blobUrl = `https://api.github.com/repos/${owner}/${repo}/git/blobs/${file.sha}`;
+        const res = await fetch(blobUrl, {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+            Accept: 'application/vnd.github.raw',
+          },
+          signal,
+        });
+
+        if (res.ok) {
+          const text = await res.text();
+          return { path: file.path, text };
+        }
+
+        // Fallback to json base64 if raw media type returns 415 or 406
+        if (res.status === 415 || res.status === 406 || res.status === 400) {
+          const jsonRes = await fetch(blobUrl, {
+            headers: {
+              Authorization: `Bearer ${activeToken}`,
+              Accept: 'application/vnd.github.v3+json',
+            },
+            signal,
+          });
+          if (jsonRes.ok) {
+            const data = await jsonRes.json();
+            if (data.content && data.encoding === 'base64') {
+              const cleanBase64 = data.content.replace(/\s/g, '');
+              const binary = atob(cleanBase64);
+              const bytes = new Uint8Array(binary.length);
+              for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+              const text = new TextDecoder('utf-8').decode(bytes);
+              return { path: file.path, text };
+            }
+          }
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+      }
+    }
+
+    // 2. For public repos or unauthenticated requests, fetch from raw.githubusercontent.com
+    // NOTE: Sending custom headers like Authorization to raw triggers a 403 preflight CORS rejection.
+    // Therefore, call with NO custom headers.
+    try {
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${file.path}`;
+      const res = await fetch(rawUrl, { signal });
+      if (res.ok) {
+        const text = await res.text();
+        return { path: file.path, text };
+      }
+    } catch (err) {
+      if (signal?.aborted) throw err;
+    }
+
+    // 3. Fallback: public GitHub Blobs API without token
+    try {
+      const blobUrl = `https://api.github.com/repos/${owner}/${repo}/git/blobs/${file.sha}`;
+      const res = await fetch(blobUrl, {
+        headers: { Accept: 'application/vnd.github.raw' },
+        signal,
+      });
+      if (res.ok) {
+        const text = await res.text();
+        return { path: file.path, text };
+      }
+    } catch (err) {
+      if (signal?.aborted) throw err;
+    }
+
+    return null;
+  };
+
   for (let i = 0; i < fileNodes.length; i += CONCURRENCY) {
+    if (signal?.aborted) {
+      throw new DOMException('Ingestion cancelled by user', 'AbortError');
+    }
     const chunk = fileNodes.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
-      chunk.map(async (file) => {
-        try {
-          const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${file.path}`;
-          const res = await fetch(rawUrl, {
-            headers: activeToken ? { Authorization: `token ${activeToken}` } : {},
-          });
-          if (res.ok) {
-            const text = await res.text();
-            return { path: file.path, text };
-          }
-          return null;
-        } catch {
-          return null;
-        }
-      })
+      chunk.map((file) => fetchSingleFileContent(file))
     );
 
     for (const item of results) {

@@ -5,6 +5,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import dotenv from 'dotenv';
+import JSZip from 'jszip';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
@@ -104,6 +105,141 @@ app.post('/api/ingest', async (req, res) => {
     }
   }
 
+  const abortController = new AbortController();
+  let clientDisconnected = false;
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      clientDisconnected = true;
+      abortController.abort();
+    }
+  });
+
+  const patterns = (pattern as string)
+    .split(/[\n,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const matchesPattern = (relPath: string, pat: string): boolean => {
+    const p = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
+    try {
+      return new RegExp(p, 'i').test(relPath);
+    } catch {
+      return relPath.includes(pat);
+    }
+  };
+
+  const isPathAllowed = (relPath: string): boolean => {
+    if (patterns.length === 0) return true;
+    const matched = patterns.some((p) => matchesPattern(relPath, p));
+    return pattern_type === 'include' ? matched : !matched;
+  };
+
+  const maxBytes = max_file_size * 1024 * 1024;
+
+  // FAST PATH: In-memory Zipball extraction (0 disk I/O, matching & beating real GitIngest)
+  try {
+    let resolvedBranch: string = branch || '';
+    if (!resolvedBranch) {
+      const repoHeaders: Record<string, string> = {
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'GitIngest-Fast',
+      };
+      if (activeToken) repoHeaders.Authorization = `Bearer ${activeToken}`;
+      const repoMetaRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: repoHeaders,
+        signal: abortController.signal,
+      });
+      if (repoMetaRes.ok) {
+        const repoMetaData = await repoMetaRes.json();
+        resolvedBranch = repoMetaData.default_branch || 'main';
+      } else {
+        resolvedBranch = 'main';
+      }
+    }
+
+    const zipballUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(resolvedBranch)}`;
+    const zipHeaders: Record<string, string> = {
+      'User-Agent': 'GitIngest-Fast',
+    };
+    if (activeToken) zipHeaders.Authorization = `Bearer ${activeToken}`;
+
+    const zipRes = await fetch(zipballUrl, {
+      headers: zipHeaders,
+      signal: abortController.signal,
+    });
+
+    if (zipRes.ok) {
+      const arrayBuf = await zipRes.arrayBuffer();
+      if (arrayBuf.byteLength > 0 && arrayBuf.byteLength < 100 * 1024 * 1024) {
+        const zip = await JSZip.loadAsync(arrayBuf);
+        const fileKeys = Object.keys(zip.files);
+        const firstKey = fileKeys[0] || '';
+        const rootPrefix = firstKey.includes('/') ? firstKey.split('/')[0] + '/' : '';
+
+        const fileEntries: Array<{ relPath: string; obj: JSZip.JSZipObject }> = [];
+        const allPaths: string[] = [];
+
+        for (const rawPath of fileKeys) {
+          const obj = zip.files[rawPath];
+          if (obj.dir) continue;
+          const relPath = rootPrefix && rawPath.startsWith(rootPrefix)
+            ? rawPath.substring(rootPrefix.length)
+            : rawPath;
+
+          if (!relPath || relPath.startsWith('.git/')) continue;
+          if (subpath && !relPath.startsWith(subpath)) continue;
+          if (isBinaryExtension(relPath)) continue;
+          if (!isPathAllowed(relPath)) continue;
+
+          allPaths.push(relPath);
+          fileEntries.push({ relPath, obj });
+        }
+
+        const treeText = buildAsciiTree(subpath || repo, allPaths);
+        const fileContents: string[] = [];
+        let totalChars = 0;
+
+        for (const { relPath, obj } of fileEntries) {
+          if (clientDisconnected) return;
+          try {
+            const content = await obj.async('string');
+            if (content.length > maxBytes || content.includes('\0')) continue;
+            totalChars += content.length;
+            fileContents.push(
+              `================================================\nFile: ${relPath}\n================================================\n${content}\n`
+            );
+          } catch {
+            // skip
+          }
+        }
+
+        const estimatedTokens = formatTokenCount(Math.round(totalChars / 4));
+        const summaryParts = [
+          `Repository: ${owner}/${repo}`,
+          resolvedBranch ? `Branch: ${resolvedBranch}` : null,
+          subpath ? `Subpath: ${subpath}` : null,
+          `Files analyzed: ${fileContents.length}`,
+          `Estimated tokens: ${estimatedTokens}`,
+          `Total characters: ${totalChars.toLocaleString()}`,
+        ].filter(Boolean);
+
+        return res.json({
+          summary: summaryParts.join('\n'),
+          tree: `Directory structure:\n${treeText}`,
+          content: fileContents.join('\n'),
+          repo_name: `${owner}/${repo}`,
+          files_analyzed: fileContents.length,
+          estimated_tokens: estimatedTokens,
+          total_chars: totalChars,
+        });
+      }
+    }
+  } catch (zipErr) {
+    if (clientDisconnected) return;
+    // Fall back to git clone if zipball fails
+  }
+
+  // FALLBACK: Shallow Git Clone on Disk
   const tempDir = path.join(os.tmpdir(), `gitingest_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
 
   try {
@@ -134,27 +270,6 @@ app.post('/api/ingest', async (req, res) => {
       return res.status(404).json({ error: `Subpath "${subpath}" does not exist in repository.` });
     }
 
-    const patterns = (pattern as string)
-      .split(/[\n,]+/)
-      .map((p) => p.trim())
-      .filter(Boolean);
-
-    const matchesPattern = (relPath: string, pat: string): boolean => {
-      const p = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
-      try {
-        return new RegExp(p, 'i').test(relPath);
-      } catch {
-        return relPath.includes(pat);
-      }
-    };
-
-    const isPathAllowed = (relPath: string): boolean => {
-      if (patterns.length === 0) return true;
-      const matched = patterns.some((p) => matchesPattern(relPath, p));
-      return pattern_type === 'include' ? matched : !matched;
-    };
-
-    const maxBytes = max_file_size * 1024 * 1024;
     const collectedFiles: Array<{ relPath: string; fullPath: string; size: number }> = [];
 
     // Fast directory traversal
@@ -194,6 +309,7 @@ app.post('/api/ingest', async (req, res) => {
     let totalChars = 0;
 
     for (let i = 0; i < collectedFiles.length; i += CHUNK_SIZE) {
+      if (clientDisconnected) return;
       const chunk = collectedFiles.slice(i, i + CHUNK_SIZE);
       const readResults = await Promise.all(
         chunk.map(async (file) => {
@@ -246,6 +362,7 @@ app.post('/api/ingest', async (req, res) => {
       total_chars: totalChars,
     });
   } catch (err: any) {
+    if (clientDisconnected) return;
     console.error('Ingestion error:', err);
     return res.status(500).json({ error: err.message || 'Failed to process repository ingestion' });
   } finally {

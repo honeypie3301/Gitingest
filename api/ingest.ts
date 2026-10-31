@@ -119,7 +119,7 @@ export default async function handler(req: any, res: any) {
 
   try {
     // 1. Resolve branch
-    let branch = parsed.branch;
+    let branch: string = parsed.branch || '';
     if (!branch) {
       const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
       if (!repoRes.ok) {

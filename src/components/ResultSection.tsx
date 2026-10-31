@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu } from 'lucide-react';
+import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle } from 'lucide-react';
 import { IngestResponse } from '../types';
 
 interface ResultSectionProps {
   result: IngestResponse | null;
   error: string | null;
   isLoading: boolean;
+  onCancel?: () => void;
 }
 
-export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isLoading }) => {
+export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isLoading, onCancel }) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
 
   const handleCopy = (text: string, sectionName: string) => {
@@ -45,6 +46,16 @@ export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isL
             <p className="text-sm text-gray-400 text-center max-w-md">
               Downloading repository archive, analyzing directory tree, filtering patterns, and consolidating codebase digest.
             </p>
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="mt-2 px-5 py-2.5 rounded-xl bg-red-600/90 hover:bg-red-500 border-2 border-red-700 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 cursor-pointer transition-transform active:translate-y-0.5 shadow-[2px_2px_0_0_#000000]"
+              >
+                <XCircle className="w-4 h-4" />
+                <span>Cancel Ingestion</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -148,7 +159,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isL
                 <textarea
                   value={result.summary}
                   readOnly
-                  className="w-full h-full min-h-[180px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm resize-y focus:outline-none relative z-10 text-amber-300"
+                  className="w-full h-full min-h-[180px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm resize-none focus:outline-none relative z-10 text-amber-300"
                 />
               </div>
             </div>
@@ -217,7 +228,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isL
               <textarea
                 value={result.content}
                 readOnly
-                className="w-full h-[55vh] min-h-[350px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm resize-y focus:outline-none relative z-10 text-gray-200 leading-relaxed"
+                className="w-full h-[55vh] min-h-[350px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm resize-none focus:outline-none relative z-10 text-gray-200 leading-relaxed"
               />
             </div>
           </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2 } from 'lucide-react';
+import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle } from 'lucide-react';
 import { IngestRequest, PatternType, TokenStatus } from '../types';
 import { getSavedPatterns, savePatterns, getSavedToken } from '../services/ingest';
 import { fetchUserRepos, RepoSummary } from '../services/githubApi';
@@ -9,6 +9,7 @@ interface GitFormProps {
   isLoading: boolean;
   tokenStatus: TokenStatus;
   onOpenTokenModal: () => void;
+  onCancel?: () => void;
 }
 
 export const GitForm: React.FC<GitFormProps> = ({
@@ -16,6 +17,7 @@ export const GitForm: React.FC<GitFormProps> = ({
   isLoading,
   tokenStatus,
   onOpenTokenModal,
+  onCancel,
 }) => {
   const [url, setUrl] = useState('');
   const [patternType, setPatternType] = useState<PatternType>('exclude');
@@ -119,25 +121,36 @@ export const GitForm: React.FC<GitFormProps> = ({
                 </div>
               </div>
 
-              <div className="relative shrink-0">
+              <div className="relative shrink-0 flex items-center gap-2">
                 <div className="w-full h-full rounded bg-black translate-y-1 translate-x-1 absolute inset-0 z-10"></div>
-                <button
-                  type="submit"
-                  disabled={isLoading || !url.trim()}
-                  className="w-full sm:w-auto relative z-20 px-5 sm:px-8 py-2.5 sm:py-3.5 rounded border-[3px] border-amber-500 font-extrabold text-sm sm:text-base lg:text-lg bg-amber-500 text-gray-950 hover:bg-amber-400 active:translate-y-0.5 active:translate-x-0.5 transition-all disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer shadow-[2px_2px_0_0_#000000]"
-                >
-                  {isLoading ? (
-                    <>
+                {isLoading ? (
+                  <div className="relative z-20 flex items-center gap-2 w-full sm:w-auto">
+                    <div className="flex-1 sm:flex-initial px-4 sm:px-6 py-2.5 sm:py-3.5 rounded border-[3px] border-amber-500 font-extrabold text-sm sm:text-base bg-amber-500 text-gray-950 flex items-center justify-center gap-2 shadow-[2px_2px_0_0_#000000]">
                       <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
                       <span>Ingesting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Ingest</span>
-                      <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5" />
-                    </>
-                  )}
-                </button>
+                    </div>
+                    {onCancel && (
+                      <button
+                        type="button"
+                        onClick={onCancel}
+                        className="px-4 py-2.5 sm:py-3.5 rounded border-[3px] border-red-600 font-extrabold text-sm sm:text-base bg-red-600 hover:bg-red-500 text-white flex items-center justify-center gap-1.5 cursor-pointer shadow-[2px_2px_0_0_#000000] active:translate-y-0.5 transition-transform"
+                        title="Cancel current ingestion"
+                      >
+                        <XCircle className="w-4 h-4" />
+                        <span>Cancel</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!url.trim()}
+                    className="w-full sm:w-auto relative z-20 px-5 sm:px-8 py-2.5 sm:py-3.5 rounded border-[3px] border-amber-500 font-extrabold text-sm sm:text-base lg:text-lg bg-amber-500 text-gray-950 hover:bg-amber-400 active:translate-y-0.5 active:translate-x-0.5 transition-all disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer shadow-[2px_2px_0_0_#000000]"
+                  >
+                    <span>Ingest</span>
+                    <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </button>
+                )}
               </div>
             </div>
 

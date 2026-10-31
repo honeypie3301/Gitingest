@@ -125,7 +125,7 @@ export async function checkServerTokenStatus(): Promise<TokenStatus> {
 /**
  * Ingest repository via server API or client-side GitHub fallback.
  */
-export async function performIngest(request: IngestRequest): Promise<IngestResponse> {
+export async function performIngest(request: IngestRequest, signal?: AbortSignal): Promise<IngestResponse> {
   const savedToken = getSavedToken();
   const autoInject = getAutoInjectToken();
 
@@ -142,6 +142,7 @@ export async function performIngest(request: IngestRequest): Promise<IngestRespo
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
+      signal,
     });
 
     if (response.ok) {
@@ -158,10 +159,13 @@ export async function performIngest(request: IngestRequest): Promise<IngestRespo
 
     console.warn('Backend API returned non-200. Falling back to client-side GitHub REST API...');
   } catch (err: any) {
+    if (signal?.aborted || err.name === 'AbortError') {
+      throw err;
+    }
     if (err.message && !err.message.includes('fetch') && !err.message.includes('NetworkError') && !err.message.includes('404')) {
       throw err;
     }
   }
 
-  return await ingestViaGitHubApi(payload, tokenToUse);
+  return await ingestViaGitHubApi(payload, tokenToUse, signal);
 }
