@@ -5,9 +5,9 @@ import { Readable } from 'node:stream';
 import { crc32, inflateRawSync } from 'node:zlib';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { Entry, ZipFile } from 'yauzl';
-import { openCachedZip, readZipBytes } from './zip-reader';
-import { buildAsciiTree, formatTokens, isBinaryPath } from '../src/services/ingestFormatting';
-import { assertNotRateLimited } from '../src/services/githubRateLimit';
+import { openCachedZip, readZipBytes } from './zip-reader.js';
+import { buildAsciiTree, formatTokens, isBinaryPath } from '../src/services/ingestFormatting.js';
+import { assertNotRateLimited } from '../src/services/githubRateLimit.js';
 
 export interface ArchiveOptions {
   owner: string;

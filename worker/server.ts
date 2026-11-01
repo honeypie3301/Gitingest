@@ -5,11 +5,11 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { mkdir, readFile, writeFile, rename, stat, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { parseGitHubUrl } from '../src/services/ingestFormatting';
-import { downloadArchive, ingestArchive } from './archive';
-import { ArtifactStorage } from './storage';
-import type { IngestRequest } from '../src/types';
-import { GitHubRateLimitError, githubRateLimitMessage } from '../src/services/githubRateLimit';
+import { parseGitHubUrl } from '../src/services/ingestFormatting.js';
+import { downloadArchive, ingestArchive } from './archive.js';
+import { ArtifactStorage } from './storage.js';
+import type { IngestRequest } from '../src/types/index.js';
+import { GitHubRateLimitError, githubRateLimitMessage } from '../src/services/githubRateLimit.js';
 
 type State = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 interface Job {

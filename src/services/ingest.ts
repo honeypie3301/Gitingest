@@ -1,6 +1,7 @@
 import { IngestRequest, IngestResponse, TokenStatus, GitHubUser } from '../types';
 import { ingestViaGitHubApi } from './githubApi';
-import { waitForWorkerJob } from './workerJobs';
+import { waitForWorkerJob, type WorkerJob } from './workerJobs';
+import { readApiResponse } from './apiResponse';
 
 const SAVED_PAT_KEY = 'gitingest_custom_pat';
 const AUTO_INJECT_KEY = 'gitingest_auto_inject_pat';
@@ -98,7 +99,7 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
       body: JSON.stringify({ auth: clean }),
     });
 
-    const data = await res.json();
+    const data = await readApiResponse(res, 'Unable to verify credentials');
     if (res.ok && data.success) {
       return { success: true, user: data.user };
     }
@@ -147,7 +148,7 @@ export async function checkServerTokenStatus(): Promise<TokenStatus> {
 
     const res = await fetch('/api/user-status', { headers });
     if (res.ok) {
-      const data = await res.json();
+      const data = await readApiResponse(res, 'Unable to check token status');
       if (data.configured && data.authorized) {
         return {
           configured: true,
@@ -206,28 +207,29 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
     backendResponded = response.headers.get('content-type')?.includes('application/json') || false;
 
     if (response.ok) {
-      const data = await response.json();
-      if (data?.id && data?.state) {
+      const data = await readApiResponse<IngestResponse | WorkerJob>(response, 'Unable to ingest repository');
+      if ('id' in data && data.id && data.state) {
         workerStarted = true;
         return await waitForWorkerJob(data, headers, signal);
       }
-      if (data && typeof data.tree === 'string' && typeof data.content === 'string') {
+      if ('tree' in data && typeof data.tree === 'string' && typeof data.content === 'string') {
         return data;
       }
+      throw new Error('Unable to ingest repository. The server returned an incomplete response.');
     }
 
     if (response.status === 401 || response.status === 403) {
-      const errData = await response.json().catch(() => ({}));
+      const errData = await readApiResponse(response, 'Unable to authorize ingestion');
       throw new Error(errData.error || 'Unauthorized: Valid owner credentials required.');
     }
 
     if (response.status === 429 || response.status >= 500) {
-      const data = await response.json().catch(() => ({}));
+      const data = await readApiResponse(response, 'Ingestion service unavailable');
       throw new Error(data.error || 'Ingestion service unavailable or rate limited. Please retry later.');
     }
 
     if (response.headers.get('content-type')?.includes('application/json')) {
-      const errData = await response.json();
+      const errData = await readApiResponse(response, 'Unable to ingest repository');
       throw new Error(errData.error || errData.message || 'Ingestion failed on server');
     }
 

@@ -1,6 +1,7 @@
 import type { IngestResponse } from '../types';
+import { readApiResponse } from './apiResponse';
 
-interface WorkerJob {
+export interface WorkerJob {
   id: string;
   state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   result?: IngestResponse;
@@ -29,7 +30,7 @@ export async function waitForWorkerJob(initial: WorkerJob, headers: Record<strin
         ...job.result,
         refreshArtifactUrl: async () => {
           const response = await fetch(url, { headers, cache: 'no-store' });
-          const refreshed = await response.json();
+          const refreshed = await readApiResponse(response, 'Unable to refresh export');
           if (!response.ok || !refreshed.result?.artifact_url) throw new Error(refreshed.error || 'Export expired. Please ingest again.');
           return refreshed.result.artifact_url;
         },
@@ -37,7 +38,7 @@ export async function waitForWorkerJob(initial: WorkerJob, headers: Record<strin
       if (job.state === 'failed' || job.state === 'cancelled') throw new Error(job.error || `Ingestion ${job.state}.`);
       await wait(1500, signal);
       const response = await fetch(url, { headers, signal, cache: 'no-store' });
-      const data = await response.json();
+      const data = await readApiResponse<WorkerJob>(response, 'Unable to read ingestion progress');
       if (!response.ok) throw new Error(data.error || 'Unable to read ingestion progress.');
       job = data;
     }

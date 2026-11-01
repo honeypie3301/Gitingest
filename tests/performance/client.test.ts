@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { performIngest } from '../../src/services/ingest';
+import { performIngest, verifyAuthWithServer } from '../../src/services/ingest';
 import { waitForWorkerJob } from '../../src/services/workerJobs';
 import { fullDigestSection, artifactUrl } from '../../src/services/digestExport';
 import { ingestViaGitHubApi } from '../../src/services/githubApi';
@@ -42,6 +42,28 @@ test('client output, job and rate-limit behavior', async t => {
       globalThis.fetch = (async () => { requests++; return Response.json({ error: 'GitHub API rate limit exceeded.' }, { status }); }) as typeof fetch;
       await assert.rejects(performIngest({ input_text: 'owner/repo' }), /rate limit/);
       assert.equal(requests, 1);
+    }
+  });
+  await t.test('plain-text platform failures explain server failure instead of reporting JSON syntax errors', async () => {
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests++;
+      return new Response('A server error has occurred\n\nFUNCTION_INVOCATION_FAILED', { status: 500, headers: { 'content-type': 'text/plain' } });
+    }) as typeof fetch;
+    const auth = await verifyAuthWithServer('new-test-token');
+    assert.equal(auth.success, false);
+    assert.match(auth.error!, /HTTP 500.*server function failed/);
+    assert.doesNotMatch(auth.error!, /Unexpected token|not valid JSON|invalid token/i);
+    await assert.rejects(performIngest({ input_text: 'owner/repo' }), /HTTP 500.*server function failed/);
+    assert.equal(requests, 2);
+  });
+  await t.test('HTML and malformed JSON responses do not expose raw markup or parsing errors', async () => {
+    for (const body of ['<html><body>Bad Gateway</body></html>', '{"success":', '']) {
+      globalThis.fetch = (async () => new Response(body, { status: 502 })) as typeof fetch;
+      const auth = await verifyAuthWithServer('new-test-token');
+      assert.equal(auth.success, false);
+      assert.match(auth.error!, /HTTP 502/);
+      assert.doesNotMatch(auth.error!, /<html>|Unexpected token|not valid JSON/i);
     }
   });
   await t.test('structured backend errors never cause another ingestion even if they mention fetch or 404', async () => {

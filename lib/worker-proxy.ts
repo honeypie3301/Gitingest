@@ -1,4 +1,4 @@
-import { checkOwnerAuth } from './owner-auth';
+import { checkOwnerAuth } from './owner-auth.js';
 
 export async function forwardWorker(req: any, res: any, suffix: string, method: string, body?: unknown) {
   const url = process.env.INGEST_WORKER_URL;
