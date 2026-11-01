@@ -393,10 +393,16 @@ app.post('/api/ingest', async (req, res) => {
         const treeText = buildAsciiTree(subpath || repo, allPaths);
         const fileContents: string[] = [];
         let totalChars = 0;
+        const MAX_ZIP_DIGEST_CHARS = 40 * 1024 * 1024; // 40MB limit
+        let isZipTruncated = false;
 
         const ZIP_CHUNK = 100;
         for (let i = 0; i < fileEntries.length; i += ZIP_CHUNK) {
           if (clientDisconnected) return;
+          if (totalChars >= MAX_ZIP_DIGEST_CHARS) {
+            isZipTruncated = true;
+            break;
+          }
           const chunk = fileEntries.slice(i, i + ZIP_CHUNK);
           const chunkResults = await Promise.all(
             chunk.map(async ({ relPath, obj }) => {
@@ -416,8 +422,16 @@ app.post('/api/ingest', async (req, res) => {
               fileContents.push(
                 `================================================\nFile: ${item.relPath}\n================================================\n${item.content}\n`
               );
+              if (totalChars >= MAX_ZIP_DIGEST_CHARS) {
+                isZipTruncated = true;
+                break;
+              }
             }
           }
+        }
+
+        if (isZipTruncated) {
+          fileContents.push(`\n[Notice: Codebase digest capped at 40MB for browser rendering stability. Use subpaths or pattern filters for targeted ingestion.]\n`);
         }
 
         const estimatedTokens = formatTokenCount(Math.round(totalChars / 4));
@@ -428,6 +442,7 @@ app.post('/api/ingest', async (req, res) => {
           `Files analyzed: ${fileContents.length}`,
           `Estimated tokens: ${estimatedTokens}`,
           `Total characters: ${totalChars.toLocaleString()}`,
+          isZipTruncated ? `(Digest capped at 40MB for browser rendering stability)` : null,
         ].filter(Boolean);
 
         return res.json({
@@ -454,16 +469,18 @@ app.post('/api/ingest', async (req, res) => {
       ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git`
       : `https://github.com/${owner}/${repo}.git`;
 
-    // 1. Optimization: Blobless clone (--filter=blob:none) to skip multi-GB blobs
+    // 1. High-Performance Clone Strategy:
+    // If subpath is specified, use blobless + sparse clone without checkout.
+    // If full repository, use standard shallow clone (--depth 1) which downloads a single compressed packfile
+    // in one fast stream (avoiding on-demand individual HTTP roundtrips per file).
     const cloneArgs = [
       'clone',
       '--depth', '1',
-      '--filter=blob:none',
       '--single-branch',
       '--no-tags',
     ];
     if (subpath) {
-      cloneArgs.push('--sparse');
+      cloneArgs.push('--filter=blob:none', '--no-checkout', '--sparse');
     }
     if (branch) {
       cloneArgs.push('-b', branch);
@@ -471,7 +488,7 @@ app.post('/api/ingest', async (req, res) => {
     cloneArgs.push(cloneUrl, tempDir);
 
     try {
-      // 5-minute timeout instead of 60s
+      // 5-minute timeout
       await execFileAsync('git', cloneArgs, { timeout: 300000 });
     } catch (gitErr: any) {
       const errMsg = gitErr.stderr || gitErr.message || '';
@@ -481,23 +498,25 @@ app.post('/api/ingest', async (req, res) => {
         });
       }
 
-      // Fallback: if server rejects --filter=blob:none, retry standard shallow clone
-      if (errMsg.includes('filter') || errMsg.includes('unknown option')) {
-        const fallbackArgs = ['clone', '--depth', '1', '--single-branch', '--no-tags'];
-        if (branch) fallbackArgs.push('-b', branch);
-        fallbackArgs.push(cloneUrl, tempDir);
-        await execFileAsync('git', fallbackArgs, { timeout: 300000 });
-      } else {
-        throw new Error(`Git clone failed: ${errMsg.slice(0, 300)}`);
-      }
+      // Fallback: if server rejects options, retry standard minimal shallow clone
+      const fallbackArgs = ['clone', '--depth', '1', '--single-branch', '--no-tags'];
+      if (branch) fallbackArgs.push('-b', branch);
+      fallbackArgs.push(cloneUrl, tempDir);
+      await execFileAsync('git', fallbackArgs, { timeout: 300000 });
     }
 
-    // 2. Optimization: Sparse-checkout for subpaths
+    // 2. Optimization: Sparse-checkout & checkout for subpaths
     if (subpath) {
       try {
         await execFileAsync('git', ['-C', tempDir, 'sparse-checkout', 'set', subpath], { timeout: 30000 });
+        await execFileAsync('git', ['-C', tempDir, 'checkout'], { timeout: 60000 });
       } catch {
-        // Continue if sparse-checkout is already active or unsupported
+        // Fallback checkout if sparse fails
+        try {
+          await execFileAsync('git', ['-C', tempDir, 'checkout'], { timeout: 60000 });
+        } catch {
+          // Continue if already checked out
+        }
       }
     }
 
@@ -508,34 +527,65 @@ app.post('/api/ingest', async (req, res) => {
 
     const collectedFiles: Array<{ relPath: string; fullPath: string; size: number }> = [];
 
-    // Fast asynchronous directory traversal
-    async function walkDirFast(currentDir: string): Promise<void> {
-      const entries = await fsPromises.readdir(currentDir, { withFileTypes: true });
-      await Promise.all(
-        entries.map(async (entry) => {
-          if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.venv') return;
-          const full = path.join(currentDir, entry.name);
-          const rel = path.relative(targetRoot, full).replace(/\\/g, '/');
+    // Directory names to immediately prune without recursing
+    const PRUNED_DIR_NAMES = new Set([
+      '.git', 'node_modules', '.venv', 'venv', 'dist', 'build', 'out',
+      'target', '.next', '.nuxt', 'coverage', '.cache', 'vendor', 'bin',
+      'obj', '.gradle', '.idea', '.vscode', '__pycache__', '.turbo'
+    ]);
 
-          if (entry.isDirectory()) {
-            await walkDirFast(full);
-          } else if (entry.isFile()) {
-            if (isBinaryExtension(rel)) return;
-            if (!isPathAllowed(rel)) return;
-            try {
-              const stat = await fsPromises.stat(full);
-              if (stat.size <= maxBytes) {
-                collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
-              }
-            } catch {
-              // skip
-            }
+    // Fast indexed file acquisition via git ls-files if available
+    let usedGitLs = false;
+    try {
+      const { stdout: lsOut } = await execFileAsync('git', ['-C', targetRoot, 'ls-files', '-z'], { timeout: 15000 });
+      const rawPaths = lsOut.split('\0').filter(Boolean);
+      for (const rel of rawPaths) {
+        if (isBinaryExtension(rel)) continue;
+        if (!isPathAllowed(rel)) continue;
+        const full = path.join(targetRoot, rel);
+        try {
+          const stat = await fsPromises.stat(full);
+          if (stat.size <= maxBytes) {
+            collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
           }
-        })
-      );
+        } catch {
+          // skip
+        }
+      }
+      usedGitLs = true;
+    } catch {
+      usedGitLs = false;
     }
 
-    await walkDirFast(targetRoot);
+    // Fallback directory traversal if git ls-files is unavailable
+    if (!usedGitLs) {
+      async function walkDirFast(currentDir: string): Promise<void> {
+        const entries = await fsPromises.readdir(currentDir, { withFileTypes: true });
+        await Promise.all(
+          entries.map(async (entry) => {
+            if (PRUNED_DIR_NAMES.has(entry.name)) return;
+            const full = path.join(currentDir, entry.name);
+            const rel = path.relative(targetRoot, full).replace(/\\/g, '/');
+
+            if (entry.isDirectory()) {
+              await walkDirFast(full);
+            } else if (entry.isFile()) {
+              if (isBinaryExtension(rel)) return;
+              if (!isPathAllowed(rel)) return;
+              try {
+                const stat = await fsPromises.stat(full);
+                if (stat.size <= maxBytes) {
+                  collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
+                }
+              } catch {
+                // skip
+              }
+            }
+          })
+        );
+      }
+      await walkDirFast(targetRoot);
+    }
 
     // Build directory tree
     const paths = collectedFiles.map((f) => f.relPath);
@@ -545,7 +595,7 @@ app.post('/api/ingest', async (req, res) => {
     const CHUNK_SIZE = 100;
     const fileContents: string[] = [];
     let totalChars = 0;
-    const MAX_DIGEST_CHARS = 250 * 1024 * 1024; // 250MB string limit to prevent V8 GC freeze
+    const MAX_DIGEST_CHARS = 40 * 1024 * 1024; // 40MB text limit to prevent browser tab & Node.js OOM
     let isTruncated = false;
 
     for (let i = 0; i < collectedFiles.length; i += CHUNK_SIZE) {
@@ -588,7 +638,7 @@ app.post('/api/ingest', async (req, res) => {
     }
 
     if (isTruncated) {
-      fileContents.push(`\n[Notice: Codebase digest capped at 250MB to ensure memory stability.]\n`);
+      fileContents.push(`\n[Notice: Codebase digest capped at 40MB for browser rendering stability. Use subpaths or pattern filters for targeted ingestion.]\n`);
     }
 
     const fullContent = fileContents.join('\n');
@@ -601,7 +651,7 @@ app.post('/api/ingest', async (req, res) => {
       `Files analyzed: ${fileContents.length}`,
       `Estimated tokens: ${estimatedTokens}`,
       `Total characters: ${totalChars.toLocaleString()}`,
-      isTruncated ? `(Digest capped at 250MB for memory stability)` : null,
+      isTruncated ? `(Digest capped at 40MB for browser rendering stability)` : null,
     ].filter(Boolean);
 
     const summary = summaryParts.join('\n');

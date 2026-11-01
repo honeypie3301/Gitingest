@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
-import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer, Eye, EyeOff } from 'lucide-react';
 import { IngestResponse } from '../types';
 import { IngestionTimer, formatDuration } from './IngestionTimer';
+
+// Threshold above which we avoid mounting a single giant string into a DOM textarea to prevent tab crashes
+const MAX_PREVIEW_CHARS = 200_000; // ~200k chars for preview (~50k tokens)
 
 interface ResultSectionProps {
   result: IngestResponse | null;
@@ -21,6 +24,17 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
   onCancel,
 }) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const [showFullPreview, setShowFullPreview] = useState(false);
+
+  const isHugeContent = useMemo(() => {
+    return Boolean(result?.content && result.content.length > MAX_PREVIEW_CHARS);
+  }, [result?.content]);
+
+  const displayedContent = useMemo(() => {
+    if (!result?.content) return '';
+    if (!isHugeContent || showFullPreview) return result.content;
+    return `${result.content.slice(0, MAX_PREVIEW_CHARS)}\n\n--- [PREVIEW TRUNCATED TO PREVENT BROWSER FREEZE: Remaining ${(result.content.length - MAX_PREVIEW_CHARS).toLocaleString()} characters omitted from preview. Use 'Copy Digest' or 'Download' to get the full file] ---`;
+  }, [result?.content, isHugeContent, showFullPreview]);
 
   const handleCopy = (text: string, sectionName: string) => {
     navigator.clipboard.writeText(text);
@@ -233,29 +247,55 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
               <h3 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
                 <FileText className="w-5 h-5 text-amber-400" />
                 <span>Files Content</span>
-              </h3>
-              <button
-                onClick={() => handleCopy(result.content, 'content')}
-                className="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-amber-400 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1.5 cursor-pointer"
-              >
-                {copiedSection === 'content' ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy Content</span>
-                  </>
+                {isHugeContent && (
+                  <span className="text-xs font-mono font-bold text-amber-400 bg-amber-950/40 border border-amber-600/50 px-2 py-0.5 rounded">
+                    Large Digest ({((result.content?.length || 0) / (1024 * 1024)).toFixed(1)}MB)
+                  </span>
                 )}
-              </button>
+              </h3>
+              <div className="flex items-center gap-2">
+                {isHugeContent && (
+                  <button
+                    onClick={() => setShowFullPreview(!showFullPreview)}
+                    className="px-2.5 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-gray-300 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1 cursor-pointer"
+                    title={showFullPreview ? "Show trimmed preview to reduce memory" : "Load entire string in preview"}
+                  >
+                    {showFullPreview ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Limit Preview</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Show All In Browser</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                <button
+                  onClick={() => handleCopy(result.content, 'content')}
+                  className="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-amber-400 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1.5 cursor-pointer"
+                >
+                  {copiedSection === 'content' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy Content</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="relative">
               <div className="w-full h-full rounded bg-black translate-y-1 translate-x-1 absolute inset-0"></div>
               <textarea
-                value={result.content}
+                value={displayedContent}
                 readOnly
                 className="w-full h-[55vh] min-h-[350px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm resize-none focus:outline-none relative z-10 text-gray-200 leading-relaxed"
               />
