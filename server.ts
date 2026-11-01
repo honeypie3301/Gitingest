@@ -31,6 +31,7 @@ const BINARY_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp', 'bmp', 'pdf', 'zip', 'tar',
   'gz', '7z', 'rar', 'exe', 'dll', 'so', 'dylib', 'bin', 'pyc', 'pyo', 'pyd',
   'woff', 'woff2', 'ttf', 'eot', 'mp3', 'mp4', 'mov', 'wav', 'ogg', 'jar',
+  'class', 'lockb', 'parquet', 'feather', 'wasm',
 ]);
 
 function isBinaryExtension(filePath: string): boolean {
@@ -121,18 +122,18 @@ app.post('/api/ingest', async (req, res) => {
     .map((p) => p.trim())
     .filter(Boolean);
 
-  const matchesPattern = (relPath: string, pat: string): boolean => {
-    const p = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
+  const compiledPatterns = patterns.map((pat) => {
+    const escaped = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
     try {
-      return new RegExp(p, 'i').test(relPath);
+      return { regex: new RegExp(escaped, 'i'), raw: pat };
     } catch {
-      return relPath.includes(pat);
+      return { regex: null, raw: pat };
     }
-  };
+  });
 
   const isPathAllowed = (relPath: string): boolean => {
-    if (patterns.length === 0) return true;
-    const matched = patterns.some((p) => matchesPattern(relPath, p));
+    if (compiledPatterns.length === 0) return true;
+    const matched = compiledPatterns.some(({ regex, raw }) => (regex ? regex.test(relPath) : relPath.includes(raw)));
     return pattern_type === 'include' ? matched : !matched;
   };
 
@@ -141,38 +142,58 @@ app.post('/api/ingest', async (req, res) => {
   // FAST PATH: In-memory Zipball extraction (0 disk I/O, matching & beating real GitIngest)
   try {
     let resolvedBranch: string = branch || '';
-    if (!resolvedBranch) {
+    let zipRes: Response;
+
+    const zipHeaders: Record<string, string> = {
+      'User-Agent': 'GitIngest-Fast',
+    };
+    if (activeToken) zipHeaders.Authorization = `Bearer ${activeToken}`;
+
+    if (resolvedBranch) {
+      zipRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(resolvedBranch)}`, {
+        headers: zipHeaders,
+        signal: abortController.signal,
+      });
+    } else {
       const repoHeaders: Record<string, string> = {
         Accept: 'application/vnd.github.v3+json',
         'User-Agent': 'GitIngest-Fast',
       };
       if (activeToken) repoHeaders.Authorization = `Bearer ${activeToken}`;
-      const repoMetaRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-        headers: repoHeaders,
-        signal: abortController.signal,
-      });
+
+      // Parallel speculative fetch for default branch metadata and main branch zipball
+      const [repoMetaRes, zipMainRes] = await Promise.all([
+        fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+          headers: repoHeaders,
+          signal: abortController.signal,
+        }),
+        fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/main`, {
+          headers: zipHeaders,
+          signal: abortController.signal,
+        }).catch(() => null),
+      ]);
+
       if (repoMetaRes.ok) {
         const repoMetaData = await repoMetaRes.json();
         resolvedBranch = repoMetaData.default_branch || 'main';
       } else {
         resolvedBranch = 'main';
       }
+
+      if (resolvedBranch === 'main' && zipMainRes && zipMainRes.ok) {
+        zipRes = zipMainRes;
+      } else {
+        zipRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(resolvedBranch)}`, {
+          headers: zipHeaders,
+          signal: abortController.signal,
+        });
+      }
     }
 
-    const zipballUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(resolvedBranch)}`;
-    const zipHeaders: Record<string, string> = {
-      'User-Agent': 'GitIngest-Fast',
-    };
-    if (activeToken) zipHeaders.Authorization = `Bearer ${activeToken}`;
-
-    const zipRes = await fetch(zipballUrl, {
-      headers: zipHeaders,
-      signal: abortController.signal,
-    });
-
-    if (zipRes.ok) {
+    if (zipRes && zipRes.ok) {
       const arrayBuf = await zipRes.arrayBuffer();
-      if (arrayBuf.byteLength > 0 && arrayBuf.byteLength < 100 * 1024 * 1024) {
+      // Cap raised from 100MB to 300MB
+      if (arrayBuf.byteLength > 0 && arrayBuf.byteLength < 300 * 1024 * 1024) {
         const zip = await JSZip.loadAsync(arrayBuf);
         const fileKeys = Object.keys(zip.files);
         const firstKey = fileKeys[0] || '';
@@ -201,7 +222,7 @@ app.post('/api/ingest', async (req, res) => {
         const fileContents: string[] = [];
         let totalChars = 0;
 
-        const ZIP_CHUNK = 50;
+        const ZIP_CHUNK = 100;
         for (let i = 0; i < fileEntries.length; i += ZIP_CHUNK) {
           if (clientDisconnected) return;
           const chunk = fileEntries.slice(i, i + ZIP_CHUNK);
@@ -286,32 +307,34 @@ app.post('/api/ingest', async (req, res) => {
 
     const collectedFiles: Array<{ relPath: string; fullPath: string; size: number }> = [];
 
-    // Fast directory traversal
-    function walkDirFast(currentDir: string) {
-      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.venv') continue;
-        const full = path.join(currentDir, entry.name);
-        const rel = path.relative(targetRoot, full).replace(/\\/g, '/');
+    // Fast asynchronous directory traversal
+    async function walkDirFast(currentDir: string): Promise<void> {
+      const entries = await fsPromises.readdir(currentDir, { withFileTypes: true });
+      await Promise.all(
+        entries.map(async (entry) => {
+          if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.venv') return;
+          const full = path.join(currentDir, entry.name);
+          const rel = path.relative(targetRoot, full).replace(/\\/g, '/');
 
-        if (entry.isDirectory()) {
-          walkDirFast(full);
-        } else if (entry.isFile()) {
-          if (isBinaryExtension(rel)) continue;
-          if (!isPathAllowed(rel)) continue;
-          try {
-            const stat = fs.statSync(full);
-            if (stat.size <= maxBytes) {
-              collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
+          if (entry.isDirectory()) {
+            await walkDirFast(full);
+          } else if (entry.isFile()) {
+            if (isBinaryExtension(rel)) return;
+            if (!isPathAllowed(rel)) return;
+            try {
+              const stat = await fsPromises.stat(full);
+              if (stat.size <= maxBytes) {
+                collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
+              }
+            } catch {
+              // skip
             }
-          } catch {
-            // skip
           }
-        }
-      }
+        })
+      );
     }
 
-    walkDirFast(targetRoot);
+    await walkDirFast(targetRoot);
 
     // Build directory tree
     const paths = collectedFiles.map((f) => f.relPath);

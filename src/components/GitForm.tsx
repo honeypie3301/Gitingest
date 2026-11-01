@@ -3,10 +3,12 @@ import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2,
 import { IngestRequest, PatternType, TokenStatus } from '../types';
 import { getSavedPatterns, savePatterns, getSavedToken } from '../services/ingest';
 import { fetchUserRepos, RepoSummary } from '../services/githubApi';
+import { IngestionTimer } from './IngestionTimer';
 
 interface GitFormProps {
   onIngest: (req: IngestRequest) => void;
   isLoading: boolean;
+  startTime?: number | null;
   tokenStatus: TokenStatus;
   onOpenTokenModal: () => void;
   onCancel?: () => void;
@@ -15,6 +17,7 @@ interface GitFormProps {
 export const GitForm: React.FC<GitFormProps> = ({
   onIngest,
   isLoading,
+  startTime,
   tokenStatus,
   onOpenTokenModal,
   onCancel,
@@ -128,6 +131,11 @@ export const GitForm: React.FC<GitFormProps> = ({
                     <div className="flex-1 sm:flex-initial px-4 sm:px-6 py-2.5 sm:py-3.5 rounded border-[3px] border-amber-500 font-extrabold text-sm sm:text-base bg-amber-500 text-gray-950 flex items-center justify-center gap-2 shadow-[2px_2px_0_0_#000000]">
                       <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
                       <span>Ingesting...</span>
+                      {startTime && (
+                        <span className="font-mono text-xs sm:text-sm bg-gray-950/15 px-1.5 py-0.5 rounded font-bold">
+                          <IngestionTimer startTime={startTime} />
+                        </span>
+                      )}
                     </div>
                     {onCancel && (
                       <button

@@ -176,10 +176,26 @@ export async function ingestViaGitHubApi(
     headers.Authorization = `Bearer ${activeToken}`;
   }
 
-  // 1. Get repo default branch
+  const zipHeaders: Record<string, string> = activeToken ? { Authorization: `Bearer ${activeToken}` } : {};
   let branch: string = parsed.branch || '';
-  if (!branch) {
-    const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal });
+  let zipRes: Response | null = null;
+
+  if (branch) {
+    try {
+      zipRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`, {
+        headers: zipHeaders,
+        signal,
+      });
+    } catch {
+      zipRes = null;
+    }
+  } else {
+    // Parallel speculative fetch for default branch metadata and main branch zipball
+    const [repoRes, zipMainRes] = await Promise.all([
+      fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal }),
+      fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/main`, { headers: zipHeaders, signal }).catch(() => null),
+    ]);
+
     if (!repoRes.ok) {
       if (repoRes.status === 404) {
         throw new Error(
@@ -191,8 +207,22 @@ export async function ingestViaGitHubApi(
       }
       throw new Error(`GitHub API error (${repoRes.status}): ${repoRes.statusText}`);
     }
+
     const repoData = await repoRes.json();
     branch = repoData.default_branch || 'main';
+
+    if (branch === 'main' && zipMainRes && zipMainRes.ok) {
+      zipRes = zipMainRes;
+    } else {
+      try {
+        zipRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`, {
+          headers: zipHeaders,
+          signal,
+        });
+      } catch {
+        zipRes = null;
+      }
+    }
   }
 
   const maxBytes = (req.max_file_size || 50) * 1024 * 1024;
@@ -202,32 +232,35 @@ export async function ingestViaGitHubApi(
     .map((p) => p.trim())
     .filter(Boolean);
 
-  const matchesPattern = (filePath: string, pat: string): boolean => {
-    const p = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
+  const compiledPatterns = patterns.map((pat) => {
+    const escaped = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
     try {
-      return new RegExp(p, 'i').test(filePath);
+      return { regex: new RegExp(escaped, 'i'), raw: pat };
     } catch {
-      return filePath.includes(pat);
+      return { regex: null, raw: pat };
     }
-  };
+  });
 
   const isIncluded = (filePath: string): boolean => {
     if (parsed.subpath && !filePath.startsWith(parsed.subpath)) {
       return false;
     }
-    if (patterns.length === 0) return true;
-    const matched = patterns.some((p) => matchesPattern(filePath, p));
+    if (compiledPatterns.length === 0) return true;
+    const matched = compiledPatterns.some(({ regex, raw }) => (regex ? regex.test(filePath) : filePath.includes(raw)));
     return patternType === 'include' ? matched : !matched;
   };
 
   // Strategy 1: Try zipball
   try {
-    const zipballUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`;
-    const zipRes = await fetch(zipballUrl, {
-      headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {},
-    });
+    if (!zipRes || !zipRes.ok) {
+      const zipballUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`;
+      zipRes = await fetch(zipballUrl, {
+        headers: zipHeaders,
+        signal,
+      });
+    }
 
-    if (zipRes.ok) {
+    if (zipRes && zipRes.ok) {
       const arrayBuffer = await zipRes.arrayBuffer();
       if (arrayBuffer.byteLength > 0) {
         const zip = await JSZip.loadAsync(arrayBuffer);

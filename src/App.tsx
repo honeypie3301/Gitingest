@@ -24,6 +24,8 @@ export default function App() {
   const [result, setResult] = useState<IngestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [ingestionStartTime, setIngestionStartTime] = useState<number | null>(null);
+  const [ingestionDuration, setIngestionDuration] = useState<number | null>(null);
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus>({
     configured: false,
@@ -147,6 +149,9 @@ export default function App() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    const startTime = Date.now();
+    setIngestionStartTime(startTime);
+    setIngestionDuration(null);
     setIsLoading(true);
     setError(null);
     setResult(null);
@@ -156,6 +161,7 @@ export default function App() {
       if (data.error) {
         setError(data.error);
       } else {
+        setIngestionDuration(Date.now() - startTime);
         setResult(data);
       }
     } catch (err: any) {
@@ -166,6 +172,7 @@ export default function App() {
       }
     } finally {
       setIsLoading(false);
+      setIngestionStartTime(null);
       abortControllerRef.current = null;
     }
   };
@@ -175,6 +182,8 @@ export default function App() {
     setResult(null);
     setError(null);
     setIsLoading(false);
+    setIngestionStartTime(null);
+    setIngestionDuration(null);
   };
 
   return (
@@ -276,6 +285,7 @@ export default function App() {
             <GitForm
               onIngest={handleIngest}
               isLoading={isLoading}
+              startTime={ingestionStartTime}
               tokenStatus={tokenStatus}
               onOpenTokenModal={() => setIsTokenModalOpen(true)}
               onCancel={handleCancel}
@@ -286,6 +296,8 @@ export default function App() {
               result={result}
               error={error}
               isLoading={isLoading}
+              startTime={ingestionStartTime}
+              durationMs={ingestionDuration}
               onCancel={handleCancel}
             />
           </main>

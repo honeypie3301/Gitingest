@@ -1,15 +1,25 @@
 import React, { useState } from 'react';
-import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle } from 'lucide-react';
+import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer } from 'lucide-react';
 import { IngestResponse } from '../types';
+import { IngestionTimer, formatDuration } from './IngestionTimer';
 
 interface ResultSectionProps {
   result: IngestResponse | null;
   error: string | null;
   isLoading: boolean;
+  startTime?: number | null;
+  durationMs?: number | null;
   onCancel?: () => void;
 }
 
-export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isLoading, onCancel }) => {
+export const ResultSection: React.FC<ResultSectionProps> = ({
+  result,
+  error,
+  isLoading,
+  startTime,
+  durationMs,
+  onCancel,
+}) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
 
   const handleCopy = (text: string, sectionName: string) => {
@@ -42,7 +52,20 @@ export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isL
           <div className="w-full h-full absolute inset-0 bg-black rounded-xl translate-y-2 translate-x-2"></div>
           <div className="bg-[#161b22] rounded-xl border-[3px] border-[#30363d] p-8 sm:p-12 relative z-20 flex flex-col items-center justify-center space-y-4">
             <div className="w-14 h-14 border-4 border-[#30363d] border-t-4 border-t-amber-400 rounded-full animate-spin"></div>
-            <p className="text-xl font-extrabold text-white text-center">Ingesting repository...</p>
+            <div className="text-center space-y-1.5">
+              <p className="text-xl font-extrabold text-white">Ingesting repository...</p>
+              {startTime && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0d1117] border border-[#30363d] text-gray-300 font-mono text-xs sm:text-sm">
+                  <Timer className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                  <span>
+                    Ingesting for:{' '}
+                    <span className="text-amber-400 font-bold">
+                      <IngestionTimer startTime={startTime} />
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
             <p className="text-sm text-gray-400 text-center max-w-md">
               Downloading repository archive, analyzing directory tree, filtering patterns, and consolidating codebase digest.
             </p>
@@ -151,6 +174,12 @@ export const ResultSection: React.FC<ResultSectionProps> = ({ result, error, isL
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
                   <span>Summary</span>
+                  {durationMs !== undefined && durationMs !== null && (
+                    <span className="text-xs font-mono font-bold text-amber-400 bg-[#0d1117] border border-[#30363d] px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Timer className="w-3 h-3 text-amber-400" />
+                      {formatDuration(durationMs)}
+                    </span>
+                  )}
                 </h3>
                 <span className="text-xs text-gray-400 font-mono">Overview</span>
               </div>
