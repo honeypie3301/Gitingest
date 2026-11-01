@@ -323,17 +323,12 @@ export async function ingestViaGitHubApi(
     return true;
   });
 
-  // A large file-by-file retry can exhaust the PAT allowance and even prevent owner authentication.
-  if (fileNodes.length > 1000) {
-    throw new Error('This repository is too large for file-by-file browser ingestion. Configure the ingestion worker to avoid GitHub API rate limits.');
-  }
-
   const treePaths = rawTree
     .filter((item) => isIncluded(item.path))
     .map((item) => item.path);
   const treeText = buildAsciiTree(parsed.subpath || repo, treePaths);
 
-  const CONCURRENCY = 30;
+  const CONCURRENCY = 60;
   const fileContents: string[] = [];
   let totalChars = 0;
 

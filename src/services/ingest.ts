@@ -223,23 +223,26 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
       throw new Error(errData.error || 'Unauthorized: Valid owner credentials required.');
     }
 
-    if (response.status === 429 || response.status >= 500) {
-      const data = await readApiResponse(response, 'Ingestion service unavailable');
-      throw new Error(data.error || 'Ingestion service unavailable or rate limited. Please retry later.');
+    if (response.status === 429) {
+      const data = await readApiResponse(response, 'Rate limit exceeded');
+      throw new Error(data.error || 'GitHub API rate limit exceeded. Please retry later.');
     }
 
-    if (response.headers.get('content-type')?.includes('application/json')) {
+    if (response.status >= 500) {
+      console.warn('Server failed or timed out on large repository. Seamlessly falling back to direct ingestion...');
+    } else if (response.headers.get('content-type')?.includes('application/json')) {
       const errData = await readApiResponse(response, 'Unable to ingest repository');
       throw new Error(errData.error || errData.message || 'Ingestion failed on server');
     }
 
     console.warn('Backend API returned non-200. Falling back to client-side GitHub REST API...');
   } catch (err: any) {
-    if (workerStarted || backendResponded) throw err;
+    if (workerStarted) throw err;
     if (signal?.aborted || err.name === 'AbortError') {
       throw err;
     }
-    if (err.message && !err.message.includes('fetch') && !err.message.includes('NetworkError') && !err.message.includes('404')) {
+    // If backend returned a non-500 error like 401/403/429, don't fallback
+    if (err.message && (err.message.includes('Unauthorized') || err.message.includes('rate limit'))) {
       throw err;
     }
   }
