@@ -1,5 +1,7 @@
 import { createWriteStream } from 'node:fs';
-import { open as openFile } from 'node:fs/promises';
+import { mkdir, open as openFile, readdir, readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { crc32, inflateRawSync } from 'node:zlib';
@@ -228,5 +230,141 @@ export async function ingestArchive(archive: string, contentFile: string, digest
     await output.close().catch(() => {});
     zip.close();
     zip.off('error', onError);
+  }
+}
+
+/**
+ * Shallow, sparse, blob-less fetch pinned to a commit. Only blobs under `subpath` are downloaded,
+ * unlike the zipball endpoint, which always returns the whole repository.
+ */
+export async function sparseClone(owner: string, repo: string, commit: string, subpath: string | undefined, dir: string, token?: string, signal?: AbortSignal) {
+  if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new Error('Invalid commit.');
+  if (subpath && subpath.split('/').some(part => part === '..')) throw new Error('Invalid subpath.');
+  const auth = token ? ['-c', `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`] : [];
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_LFS_SKIP_SMUDGE: '1' };
+  const git = (args: string[], global: string[] = []) => new Promise<void>((resolve, reject) => {
+    execFile('git', [...global, '-C', dir, ...args], { env, signal, maxBuffer: 64 * 1024 * 1024, timeout: 10 * 60_000 }, error => {
+      // Never forward the command line: it can contain the Authorization header.
+      if (!error) resolve();
+      else reject(signal?.aborted ? new DOMException('Ingestion cancelled', 'AbortError') : new Error(`git ${args[0]} failed`));
+    });
+  });
+  await mkdir(dir, { recursive: true });
+  await git(['init', '--quiet']);
+  await git(['remote', 'add', 'origin', `https://github.com/${owner}/${repo}.git`]);
+  if (subpath) {
+    await git(['sparse-checkout', 'init', '--cone']);
+    await git(['sparse-checkout', 'set', '--', subpath]);
+  }
+  await git(['fetch', '--quiet', '--depth=1', '--filter=blob:none', 'origin', commit], auth);
+  await git(['checkout', '--quiet', 'FETCH_HEAD'], [...auth, '-c', 'advice.detachedHead=false']);
+}
+
+async function* walkFiles(directory: string, base: string): AsyncGenerator<{ name: string; file: string }> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    if (entry.name === '.git') continue;
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) yield* walkFiles(file, base);
+    else if (entry.isFile()) yield { name: path.relative(base, file).split(path.sep).join('/'), file };
+  }
+}
+
+/** Same filters, limits and output as ingestArchive, but reads a checked-out working tree from disk. */
+export async function ingestDirectory(dir: string, contentFile: string, digestFile: string, options: ArchiveOptions) {
+  const output = await openFile(contentFile, 'w');
+  const maxChars = (options.max_file_size ?? 50) * 1024 * 1024;
+  const concurrency = Math.max(1, Math.min(32, Number.isFinite(options.concurrency) ? Math.floor(options.concurrency!) : 16));
+  const previewChars = options.preview_chars ?? PREVIEW_CHARS;
+  const patterns = (options.pattern || '').split(/[\n,]+/).map(p => p.trim()).filter(Boolean).map(raw => {
+    try { return { raw, regex: new RegExp(raw.replace(/\./g, '\\.').replace(/\*/g, '.*'), 'i') }; }
+    catch { return { raw, regex: null }; }
+  });
+  const allowed = (name: string) => {
+    if (options.subpath && !name.startsWith(options.subpath)) return false;
+    if (!patterns.length) return true;
+    const matches = patterns.some(({ regex, raw }) => regex ? regex.test(name) : name.includes(raw));
+    return options.pattern_type === 'include' ? matches : !matches;
+  };
+  let filesAnalyzed = 0;
+  let totalChars = 0;
+  let contentPreview = '';
+  let contentChars = 0;
+  let skippedBinary = 0;
+  let skippedSize = 0;
+  let pendingBlocks: string[] = [];
+  let pendingChars = 0;
+  let lastYield = performance.now();
+  try {
+    const entries: Array<{ name: string; file: string }> = [];
+    const start = options.subpath ? path.join(dir, options.subpath) : dir;
+    if (await stat(start).then(info => info.isDirectory(), () => false)) {
+      for await (const item of walkFiles(start, dir)) {
+        if (isBinaryPath(item.name) || !allowed(item.name)) continue;
+        entries.push(item);
+      }
+    }
+    const tree = `Directory structure:\n${buildAsciiTree(options.subpath || options.repo, entries.map(item => item.name))}`;
+    for (let i = 0; i < entries.length;) {
+      if (performance.now() - lastYield > 25) {
+        await yieldToEventLoop(undefined, { signal: options.signal });
+        lastYield = performance.now();
+      }
+      options.signal?.throwIfAborted();
+      const batch = entries.slice(i, i + concurrency);
+      i += batch.length;
+      const results = await Promise.all(batch.map(async ({ file, name }) => {
+        if ((await stat(file)).size > maxChars * 3) return { skip: 'size' as const };
+        const content = (await readFile(file)).toString('utf8');
+        if (content.length > maxChars) return { skip: 'size' as const };
+        if (content.includes('\0')) return { skip: 'binary' as const };
+        return { name, content };
+      }));
+      for (const result of results) {
+        if ('skip' in result) {
+          if (result.skip === 'size') skippedSize++; else skippedBinary++;
+          continue;
+        }
+        const block = `${filesAnalyzed ? '\n' : ''}================================================\nFile: ${result.name}\n================================================\n${result.content}\n`;
+        pendingBlocks.push(block);
+        pendingChars += block.length;
+        if (pendingChars >= 1024 * 1024) {
+          await output.writeFile(pendingBlocks.join(''), 'utf8');
+          pendingBlocks = []; pendingChars = 0;
+        }
+        if (contentPreview.length < previewChars) contentPreview += block.slice(0, previewChars - contentPreview.length);
+        contentChars += block.length;
+        totalChars += result.content.length;
+        filesAnalyzed++;
+      }
+      options.onProgress?.(i);
+    }
+    if (pendingBlocks.length) await output.writeFile(pendingBlocks.join(''), 'utf8');
+    const estimatedTokens = formatTokens(Math.round(totalChars / 4));
+    const summary = [
+      `Repository: ${options.owner}/${options.repo}`, `Branch: ${options.branch}`,
+      options.subpath ? `Subpath: ${options.subpath}` : null,
+      `Files analyzed: ${filesAnalyzed}`, `Estimated tokens: ${estimatedTokens}`,
+      `Total characters: ${totalChars.toLocaleString()}`,
+    ].filter(Boolean).join('\n');
+    const header = `${summary}\n\n${tree}\n\n`;
+    await output.close();
+    const { createReadStream } = await import('node:fs');
+    await pipeline(Readable.from((async function* () {
+      yield header;
+      for await (const chunk of createReadStream(contentFile)) yield chunk;
+    })()), createWriteStream(digestFile), { signal: options.signal });
+    return {
+      summary, tree: tree.slice(0, previewChars), content: contentPreview,
+      repo_name: `${options.owner}/${options.repo}`, files_analyzed: filesAnalyzed,
+      estimated_tokens: estimatedTokens, total_chars: totalChars,
+      content_preview_truncated: contentChars > previewChars,
+      tree_preview_truncated: tree.length > previewChars,
+      content_offset: header.length, skipped_binary: skippedBinary, skipped_size: skippedSize,
+      content_chars: contentChars,
+    };
+  } finally {
+    await output.close().catch(() => {});
   }
 }

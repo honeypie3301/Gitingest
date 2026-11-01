@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile, rename, stat, readdir, rm } from 'node:fs/p
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseGitHubUrl } from '../src/services/ingestFormatting.js';
-import { downloadArchive, ingestArchive } from './archive.js';
+import { downloadArchive, ingestArchive, ingestDirectory, sparseClone } from './archive.js';
 import { ArtifactStorage } from './storage.js';
 import type { IngestRequest } from '../src/types/index.js';
 import { GitHubRateLimitError, githubRateLimitMessage } from '../src/services/githubRateLimit.js';
@@ -204,6 +204,7 @@ export async function createWorkerApp() {
       enqueue(async () => {
         const started = performance.now();
         const archive = path.join(root, 'archives', `${hash(`${parsed.owner}/${parsed.repo}:${commit}`)}.zip`);
+        const checkout = path.join(root, 'archives', `${job.id}.git`);
         const contentPart = path.join(directory, `${job.id}.content.part`);
         const digestPart = path.join(directory, `${job.id}.digest.part`);
         activeKey = key; activeArchive = archive;
@@ -220,20 +221,37 @@ export async function createWorkerApp() {
           } catch { /* Build a missing result. */ }
           job.state = 'running'; job.phase = 'downloading'; await persist(job);
           await mkdir(directory, { recursive: true });
-          let archiveHit = false;
-          try { await stat(archive); archiveHit = true; } catch { /* Cold commit. */ }
+          // A zipball always contains the whole repository. For a subpath, fetch only that folder with a sparse checkout.
+          let sparse = Boolean(parsed.subpath);
           const beforeDownload = performance.now();
-          if (!archiveHit) {
-            await downloadArchive(`${repoUrl}/zipball/${commit}`, token, archive + '.part', controller.signal);
-            await rename(archive + '.part', archive);
+          if (sparse) {
+            activeArchive = checkout;
+            try { await sparseClone(parsed.owner, parsed.repo, commit, parsed.subpath, checkout, token, controller.signal); }
+            catch (error) {
+              if (controller.signal.aborted) throw error;
+              console.error('Sparse checkout failed; falling back to the repository archive.');
+              await rm(checkout, { recursive: true, force: true });
+              sparse = false; activeArchive = archive;
+            }
+          }
+          let archiveHit = false;
+          if (!sparse) {
+            try { await stat(archive); archiveHit = true; } catch { /* Cold commit. */ }
+            if (!archiveHit) {
+              await downloadArchive(`${repoUrl}/zipball/${commit}`, token, archive + '.part', controller.signal);
+              await rename(archive + '.part', archive);
+            }
           }
           job.timings = { download_ms: performance.now() - beforeDownload, archive_cache_hit: Number(archiveHit) };
           job.phase = 'processing'; await persist(job);
           let lastProgress = 0;
-          const processed = await ingestArchive(archive, contentPart, digestPart, {
+          const ingestOptions = {
             ...options, concurrency: Number(process.env.INGEST_CONCURRENCY || 4), signal: controller.signal,
-            onProgress: files => { job.files_processed = files; lastProgress = files; },
-          });
+            onProgress: (files: number) => { job.files_processed = files; lastProgress = files; },
+          };
+          const processed = sparse
+            ? await ingestDirectory(checkout, contentPart, digestPart, ingestOptions)
+            : await ingestArchive(archive, contentPart, digestPart, ingestOptions);
           job.files_processed = lastProgress;
           job.timings.processing_ms = performance.now() - beforeDownload - job.timings.download_ms;
           job.phase = 'uploading'; await persist(job);
@@ -251,9 +269,9 @@ export async function createWorkerApp() {
           // Never serialize fetch errors or request headers containing credentials.
           job.error = controller.signal.aborted ? 'Ingestion cancelled.' : error instanceof GitHubRateLimitError ? error.message : 'Ingestion failed during ' + failedPhase + '. Please retry.';
           if (!controller.signal.aborted) console.error('Ingestion failed:', error?.name || 'Error');
-          if (!controller.signal.aborted && failedPhase === 'processing') await rm(archive, { force: true });
+          if (!controller.signal.aborted && failedPhase === 'processing') await rm(archive, { force: true });  // Directory checkouts are always removed below.
         } finally {
-          const cleanup = await Promise.allSettled([rm(archive + '.part', { force: true }), rm(contentPart, { force: true }), rm(digestPart, { force: true })]);
+          const cleanup = await Promise.allSettled([rm(archive + '.part', { force: true }), rm(checkout, { recursive: true, force: true }), rm(contentPart, { force: true }), rm(digestPart, { force: true })]);
           for (const item of cleanup) if (item.status === 'rejected') console.error('Temporary ingestion file could not be removed:', item.reason?.code || 'Error');
           controllers.delete(job.id);
           // Keep the final in-memory status available if persistence fails; never leave clients polling a stale queued state.

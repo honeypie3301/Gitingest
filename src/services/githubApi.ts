@@ -1,7 +1,6 @@
 import { buildAsciiTree, formatTokens, isBinaryPath, parseGitHubUrl } from './ingestFormatting';
 import { assertNotRateLimited, GitHubRateLimitError } from './githubRateLimit';
 export { parseGitHubUrl } from './ingestFormatting';
-import JSZip from 'jszip';
 import { IngestRequest, IngestResponse, GitHubUser } from '../types';
 
 export interface RepoSummary {
@@ -127,26 +126,10 @@ export async function ingestViaGitHubApi(
     headers.Authorization = `Bearer ${activeToken}`;
   }
 
-  const zipHeaders: Record<string, string> = activeToken ? { Authorization: `Bearer ${activeToken}` } : {};
   let branch: string = parsed.branch || '';
-  let zipRes: Response | null = null;
 
-  if (branch) {
-    try {
-      zipRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`, {
-        headers: zipHeaders,
-        signal,
-      });
-    } catch {
-      zipRes = null;
-    }
-  } else {
-    // Parallel speculative fetch for default branch metadata and main branch zipball
-    const [repoRes, zipMainRes] = await Promise.all([
-      fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal }),
-      fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/main`, { headers: zipHeaders, signal }).catch(() => null),
-    ]);
-
+  if (!branch) {
+    const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal });
     if (!repoRes.ok) {
       if (repoRes.status === 404) {
         throw new Error(
@@ -158,22 +141,8 @@ export async function ingestViaGitHubApi(
       }
       throw new Error(`GitHub API error (${repoRes.status}): ${repoRes.statusText}`);
     }
-
     const repoData = await repoRes.json();
     branch = repoData.default_branch || 'main';
-
-    if (branch === 'main' && zipMainRes && zipMainRes.ok) {
-      zipRes = zipMainRes;
-    } else {
-      try {
-        zipRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`, {
-          headers: zipHeaders,
-          signal,
-        });
-      } catch {
-        zipRes = null;
-      }
-    }
   }
 
   const maxBytes = (req.max_file_size || 50) * 1024 * 1024;
@@ -201,105 +170,8 @@ export async function ingestViaGitHubApi(
     return patternType === 'include' ? matched : !matched;
   };
 
-  // Strategy 1: Try zipball
-  try {
-    if (!zipRes || !zipRes.ok) {
-      const zipballUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`;
-      zipRes = await fetch(zipballUrl, {
-        headers: zipHeaders,
-        signal,
-      });
-    }
-
-    if (zipRes && zipRes.ok) {
-      const arrayBuffer = await zipRes.arrayBuffer();
-      if (arrayBuffer.byteLength > 0) {
-        const zip = await JSZip.loadAsync(arrayBuffer);
-        const fileEntries: Array<{ relPath: string; zipObject: JSZip.JSZipObject }> = [];
-        const allPaths: string[] = [];
-
-        const fileKeys = Object.keys(zip.files);
-        const firstKey = fileKeys[0] || '';
-        const rootPrefix = firstKey.includes('/') ? firstKey.split('/')[0] + '/' : '';
-
-        for (const rawPath of fileKeys) {
-          const zipObj = zip.files[rawPath];
-          if (zipObj.dir) continue;
-
-          const relPath = rootPrefix && rawPath.startsWith(rootPrefix)
-            ? rawPath.substring(rootPrefix.length)
-            : rawPath;
-
-          if (!relPath || relPath.startsWith('.git/')) continue;
-          if (isBinaryPath(relPath)) continue;
-          if (!isIncluded(relPath)) continue;
-
-          allPaths.push(relPath);
-          fileEntries.push({ relPath, zipObject: zipObj });
-        }
-
-        const treeText = buildAsciiTree(parsed.subpath || repo, allPaths);
-        const fileContents: string[] = [];
-        let totalChars = 0;
-        let filesAnalyzed = 0;
-
-        const ZIP_CHUNK = 50;
-        for (let i = 0; i < fileEntries.length; i += ZIP_CHUNK) {
-          if (signal?.aborted) break;
-          const chunk = fileEntries.slice(i, i + ZIP_CHUNK);
-          const chunkResults = await Promise.all(
-            chunk.map(async ({ relPath, zipObject }) => {
-              try {
-                const content = await zipObject.async('string');
-                if (content.length > maxBytes || content.includes('\0')) return null;
-                return { relPath, content, len: content.length };
-              } catch {
-                return null;
-              }
-            })
-          );
-
-          for (const item of chunkResults) {
-            if (item) {
-              totalChars += item.len;
-              filesAnalyzed++;
-              fileContents.push(
-                `================================================\nFile: ${item.relPath}\n================================================\n${item.content}\n`
-              );
-            }
-          }
-        }
-
-        signal?.throwIfAborted();
-        const estTokens = formatTokens(Math.round(totalChars / 4));
-        const summary = [
-          `Repository: ${owner}/${repo}`,
-          `Branch: ${branch}`,
-          parsed.subpath ? `Subpath: ${parsed.subpath}` : null,
-          `Files analyzed: ${filesAnalyzed}`,
-          `Estimated tokens: ${estTokens}`,
-          `Total characters: ${totalChars.toLocaleString()}`,
-        ]
-          .filter(Boolean)
-          .join('\n');
-
-        return {
-          summary,
-          tree: `Directory structure:\n${treeText}`,
-          content: fileContents.join('\n'),
-          repo_name: `${owner}/${repo}`,
-          files_analyzed: filesAnalyzed,
-          estimated_tokens: estTokens,
-          total_chars: totalChars,
-        };
-      }
-    }
-  } catch (zipErr) {
-    signal?.throwIfAborted();
-    console.warn('Zipball fetch failed (likely browser CORS redirect). Falling back to REST tree + raw contents...', zipErr);
-  }
-
-  // Strategy 2: Browser CORS-safe REST Git Tree + GitHub Git Blobs / raw
+  // codeload.github.com sends no CORS header for our origin, so the browser cannot use zipballs.
+  // Browser CORS-safe REST Git Tree + GitHub Git Blobs / raw
   const treeRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
     { headers, signal }
@@ -417,22 +289,25 @@ export async function ingestViaGitHubApi(
     return null;
   };
 
-  for (let i = 0; i < fileNodes.length; i += CONCURRENCY) {
-    if (signal?.aborted) {
-      throw new DOMException('Ingestion cancelled by user', 'AbortError');
-    }
-    const chunk = fileNodes.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(
-      chunk.map((file) => fetchSingleFileContent(file))
-    );
-
-    for (const item of results) {
-      if (item && typeof item.text === 'string') {
-        totalChars += item.text.length;
-        fileContents.push(
-          `================================================\nFile: ${item.path}\n================================================\n${item.text}\n`
-        );
+  // Sliding window: a slow request never stalls the other workers (unlike Promise.all per chunk).
+  const results = new Array<{ path: string; text: string } | null>(fileNodes.length).fill(null);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, fileNodes.length) }, async () => {
+      while (next < fileNodes.length) {
+        if (signal?.aborted) throw new DOMException('Ingestion cancelled by user', 'AbortError');
+        const index = next++;
+        results[index] = await fetchSingleFileContent(fileNodes[index]);
       }
+    })
+  );
+
+  for (const item of results) {
+    if (item && typeof item.text === 'string') {
+      totalChars += item.text.length;
+      fileContents.push(
+        `================================================\nFile: ${item.path}\n================================================\n${item.text}\n`
+      );
     }
   }
 
