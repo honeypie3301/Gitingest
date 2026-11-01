@@ -79,7 +79,9 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
     return { authorized: false, reason: 'No authorization credentials provided.' };
   }
 
-  const clean = tokenOrKey.trim();
+  let clean = tokenOrKey.trim();
+  clean = clean.replace(/^["']|["']$/g, '').trim();
+  clean = clean.replace(/^(bearer|token)\s+/i, '').trim();
 
   // 1. Direct match with configured server secret / access key
   if (OWNER_ACCESS_KEY && clean === OWNER_ACCESS_KEY) {
@@ -94,29 +96,75 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
     };
   }
 
-  // 2. Check token cache
+  // 2. Check token cache for previously authorized owner token
   const cached = tokenCache.get(clean);
   const now = Date.now();
-  if (cached && now - cached.cachedAt < TOKEN_CACHE_TTL) {
-    if (cached.isOwner) {
-      return { authorized: true, user: cached.user };
-    }
-    return { authorized: false, reason: 'Token is not authorized as owner.' };
+  if (cached && cached.isOwner && now - cached.cachedAt < TOKEN_CACHE_TTL) {
+    return { authorized: true, user: cached.user };
   }
 
   // 3. Verify GitHub Token via GitHub API
   try {
-    const ghRes = await fetch('https://api.github.com/user', {
+    let ghRes = await fetch('https://api.github.com/user', {
       headers: {
-        Authorization: `Bearer ${clean}`,
+        Authorization: `token ${clean}`,
         Accept: 'application/vnd.github.v3+json',
         'User-Agent': 'GitIngest-OwnerAuth',
       },
     });
 
+    if (!ghRes.ok && ghRes.status === 401) {
+      ghRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'GitIngest-OwnerAuth',
+        },
+      });
+    }
+
+    // Fallback for fine-grained PATs without user profile permissions
+    if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
+      const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/gitingest`, {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'GitIngest-OwnerAuth',
+        },
+      });
+      if (repoCheck.ok) {
+        const repoData = await repoCheck.json();
+        if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+          const user = {
+            id: repoData.owner.id,
+            login: repoData.owner.login,
+            avatar_url: repoData.owner.avatar_url || '',
+            name: repoData.owner.login,
+            html_url: repoData.owner.html_url,
+          };
+          tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+          return { authorized: true, user };
+        }
+      }
+    }
+
     if (!ghRes.ok) {
-      tokenCache.set(clean, { isOwner: false, user: null, cachedAt: now });
-      return { authorized: false, reason: 'Invalid GitHub token or authentication failed.' };
+      const errText = await ghRes.text().catch(() => '');
+      let errMsg = `GitHub API (${ghRes.status})`;
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed.message) {
+          errMsg += `: ${parsed.message}`;
+          if (parsed.message.includes('Bad credentials')) {
+            errMsg += ' — please check that the token is active and was copied completely.';
+          } else if (parsed.message.includes('Resource not accessible')) {
+            errMsg += ' — if using a Fine-Grained PAT, ensure repository access is granted to your gitingest repository.';
+          }
+        }
+      } catch {
+        if (errText) errMsg += `: ${errText.slice(0, 100)}`;
+      }
+      return { authorized: false, reason: errMsg };
     }
 
     const userData = await ghRes.json();
@@ -136,7 +184,6 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
       return { authorized: true, user };
     }
 
-    tokenCache.set(clean, { isOwner: false, user: null, cachedAt: now });
     return {
       authorized: false,
       reason: `Unauthorized: Token belongs to @${userData.login}, not instance owner @${OWNER_GITHUB_LOGIN}.`,

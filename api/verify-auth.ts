@@ -12,7 +12,9 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Authentication token or access key required' });
   }
 
-  const clean = auth.trim();
+  let clean = auth.trim();
+  clean = clean.replace(/^["']|["']$/g, '').trim();
+  clean = clean.replace(/^(bearer|token)\s+/i, '').trim();
 
   // 1. Direct secret / access key match
   if (OWNER_ACCESS_KEY && clean === OWNER_ACCESS_KEY) {
@@ -29,16 +31,59 @@ export default async function handler(req: any, res: any) {
 
   // 2. Validate GitHub Token
   try {
-    const ghRes = await fetch('https://api.github.com/user', {
+    let ghRes = await fetch('https://api.github.com/user', {
       headers: {
-        Authorization: `Bearer ${clean}`,
+        Authorization: `token ${clean}`,
         Accept: 'application/vnd.github.v3+json',
         'User-Agent': 'GitIngest-OwnerAuth',
       },
     });
 
+    if (!ghRes.ok && ghRes.status === 401) {
+      ghRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'GitIngest-OwnerAuth',
+        },
+      });
+    }
+
+    if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
+      const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/gitingest`, {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'GitIngest-OwnerAuth',
+        },
+      });
+      if (repoCheck.ok) {
+        const repoData = await repoCheck.json();
+        if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+          return res.json({
+            success: true,
+            user: {
+              id: repoData.owner.id,
+              login: repoData.owner.login,
+              avatar_url: repoData.owner.avatar_url || '',
+              name: repoData.owner.login,
+              html_url: repoData.owner.html_url,
+            },
+          });
+        }
+      }
+    }
+
     if (!ghRes.ok) {
-      return res.status(401).json({ success: false, error: 'Invalid GitHub token or authentication failed.' });
+      const errText = await ghRes.text().catch(() => '');
+      let errMsg = `GitHub API (${ghRes.status})`;
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed.message) errMsg += `: ${parsed.message}`;
+      } catch {
+        if (errText) errMsg += `: ${errText.slice(0, 100)}`;
+      }
+      return res.status(401).json({ success: false, error: errMsg });
     }
 
     const userData = await ghRes.json();

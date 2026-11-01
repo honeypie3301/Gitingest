@@ -130,39 +130,37 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
 
           {activeTab === 'token' ? (
             <div className="space-y-4">
-              {/* Security Explanation */}
-              <div className="text-xs leading-relaxed bg-[#0d1117] p-3.5 rounded-lg border-2 border-[#30363d] text-gray-300">
-                <div className="flex items-start gap-2">
-                  <Shield className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                  <div>
-                    <span className="font-bold text-white">Is it permanently saved & secure?</span>{' '}
-                    <p className="mt-1">
-                      Yes! When saved here, it is permanently stored in your browser&apos;s isolated <code className="text-amber-400 bg-amber-950/40 px-1 py-0.5 rounded">localStorage</code>. It is never logged or transmitted to third parties, only sent directly to GitHub to fetch your repositories.
-                    </p>
-                    <p className="mt-1 text-gray-400">
-                      For server deployments, you can also set <code className="text-amber-400">GITHUB_TOKEN</code> in your environment variables for 100% server-side isolation.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               {/* Token Input */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
                   Personal Access Token (classic or fine-grained)
                 </label>
-                <input
-                  type="password"
-                  value={tokenInput}
-                  onChange={(e) => {
-                    setTokenInput(e.target.value);
-                    if (e.target.value.length > 20) {
-                      verify(e.target.value);
-                    }
-                  }}
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                  className="w-full px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg font-mono text-sm focus:outline-none focus:border-amber-400 text-white placeholder-gray-500"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={tokenInput}
+                    onChange={(e) => {
+                      setTokenInput(e.target.value);
+                      setVerifiedUser(null);
+                      setVerifyError(null);
+                    }}
+                    onBlur={() => {
+                      if (tokenInput.trim().length > 15) {
+                        verify(tokenInput);
+                      }
+                    }}
+                    placeholder="ghp_... or github_pat_..."
+                    className="flex-1 px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg font-mono text-sm focus:outline-none focus:border-amber-400 text-white placeholder-gray-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => verify(tokenInput)}
+                    disabled={isVerifying || !tokenInput.trim()}
+                    className="px-4 py-2.5 bg-[#21262d] hover:bg-[#30363d] border-2 border-[#30363d] text-amber-400 font-bold rounded-lg text-xs cursor-pointer disabled:opacity-50 transition-colors"
+                  >
+                    Verify
+                  </button>
+                </div>
               </div>
 
               {/* Status */}

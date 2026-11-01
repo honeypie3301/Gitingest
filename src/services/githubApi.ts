@@ -11,13 +11,47 @@ export interface RepoSummary {
 
 export async function verifyGitHubToken(token: string): Promise<GitHubUser | null> {
   if (!token || !token.trim()) return null;
+  let clean = token.trim().replace(/^["']|["']$/g, '').replace(/^(bearer|token)\s+/i, '').trim();
+  if (!clean) return null;
+
   try {
-    const res = await fetch('https://api.github.com/user', {
+    let res = await fetch('https://api.github.com/user', {
       headers: {
-        Authorization: `Bearer ${token.trim()}`,
+        Authorization: `token ${clean}`,
         Accept: 'application/vnd.github.v3+json',
       },
     });
+
+    if (!res.ok && res.status === 401) {
+      res = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+    }
+
+    if (!res.ok && (res.status === 403 || res.status === 404)) {
+      const repoRes = await fetch('https://api.github.com/repos/honeypie3301/gitingest', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+      if (repoRes.ok) {
+        const repoData = await repoRes.json();
+        if (repoData.owner) {
+          return {
+            id: repoData.owner.id,
+            login: repoData.owner.login,
+            avatar_url: repoData.owner.avatar_url,
+            name: repoData.owner.login,
+            html_url: repoData.owner.html_url,
+          };
+        }
+      }
+    }
+
     if (!res.ok) return null;
     const data = await res.json();
     return {
