@@ -309,9 +309,7 @@ export async function ingestViaGitHubApi(
     throw new Error(`Failed to fetch file tree for "${owner}/${repo}" (${treeRes.status}).`);
   }
   const treeData = await treeRes.json();
-  if (treeData.truncated) {
-    throw new Error('GitHub truncated this repository tree. Use the ingestion worker to export the complete repository.');
-  }
+  // If GitHub truncates the tree (e.g. >100,000 files or 7MB tree response), proceed with the files that were returned instead of crashing!
   const rawTree: Array<{ path: string; mode: string; type: string; sha: string; size?: number }> =
     treeData.tree || [];
 
