@@ -1,0 +1,3 @@
+@echo off
+echo Starting GitIngest on http://localhost:3000 ...
+npx tsx server.ts

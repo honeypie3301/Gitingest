@@ -1,0 +1,3 @@
+@echo off
+echo Configuring Windows Background Autostart...
+node scripts/setup-autostart.js
