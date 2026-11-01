@@ -2,7 +2,7 @@ export type PatternType = 'exclude' | 'include';
 
 export interface IngestRequest {
   input_text: string;
-  max_file_size?: number; // In KB
+  max_file_size?: number; // In MB (legacy checks decoded UTF-16 character length)
   pattern_type?: PatternType;
   pattern?: string;
   token?: string;
@@ -17,6 +17,13 @@ export interface IngestResponse {
   estimated_tokens?: string;
   total_chars?: number;
   error?: string;
+  artifact_url?: string;
+  content_preview_truncated?: boolean;
+  tree_preview_truncated?: boolean;
+  content_offset?: number;
+  content_chars?: number;
+  // Browser-only callback; credentials stay in its closure, never in worker metadata.
+  refreshArtifactUrl?: () => Promise<string>;
 }
 
 export interface GitHubUser {

@@ -1,0 +1,23 @@
+services:
+  ingest-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      INGEST_WORKER_SECRET: ${INGEST_WORKER_SECRET:?Set a shared worker secret}
+      INGEST_WORKER_PUBLIC_URL: ${INGEST_WORKER_PUBLIC_URL:?Set the worker HTTPS URL}
+      INGEST_WEB_ORIGIN: ${INGEST_WEB_ORIGIN:-*}
+      INGEST_CONCURRENCY: ${INGEST_CONCURRENCY:-4}
+      INGEST_S3_BUCKET: ${INGEST_S3_BUCKET:-}
+      INGEST_S3_ENDPOINT: ${INGEST_S3_ENDPOINT:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ingest-data:/data
+    restart: unless-stopped
+
+volumes:
+  ingest-data:

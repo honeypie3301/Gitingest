@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import os from 'os';
 import dotenv from 'dotenv';
 import JSZip from 'jszip';
+import { handleWorkerJob, submitWorkerJob } from './lib/worker-proxy';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
@@ -74,7 +75,7 @@ function checkRateLimit(key: string, limit: number, windowMs: number): boolean {
 }
 
 // Helper to verify if a token or secret is authorized as the owner
-async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized: boolean; user?: any; reason?: string }> {
+async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized: boolean; user?: any; reason?: string; status?: number }> {
   if (!tokenOrKey || !tokenOrKey.trim()) {
     return { authorized: false, reason: 'No authorization credentials provided.' };
   }
@@ -121,6 +122,11 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
           'User-Agent': 'GitIngest-OwnerAuth',
         },
       });
+    }
+
+    if (ghRes.status === 429 || (ghRes.status === 403 && ghRes.headers.get('x-ratelimit-remaining') === '0')) {
+      const reset = Number(ghRes.headers.get('x-ratelimit-reset'));
+      return { authorized: false, status: 429, reason: `GitHub API rate limit exceeded.${reset ? ` Retry after ${new Date(reset * 1000).toISOString()}.` : ' Retry after the rate limit resets.'}` };
     }
 
     // Fallback for fine-grained PATs without user profile permissions
@@ -210,7 +216,7 @@ app.post('/api/verify-auth', async (req, res) => {
     return res.json({ success: true, user: check.user });
   }
 
-  return res.status(401).json({ success: false, error: check.reason || 'Invalid credentials' });
+  return res.status(check.status || 401).json({ success: false, error: check.reason || 'Invalid credentials' });
 });
 
 // User & Token Status Endpoint
@@ -232,6 +238,7 @@ app.get('/api/user-status', async (req, res) => {
 });
 
 // High-speed Ingest Endpoint
+app.all('/api/ingest/jobs/:id', handleWorkerJob);
 app.post('/api/ingest', async (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   if (!checkRateLimit(`ingest:${ip}`, 30, 60 * 1000)) {
@@ -245,8 +252,8 @@ app.post('/api/ingest', async (req, res) => {
   // Enforce server-side authorization
   const authCheck = await verifyOwnerCredentials(incomingToken);
   if (!authCheck.authorized) {
-    return res.status(401).json({
-      error: `Unauthorized: ${authCheck.reason || 'Valid owner Personal Access Token or access key is required.'}`,
+    return res.status(authCheck.status || 401).json({
+      error: authCheck.status === 429 ? authCheck.reason : `Unauthorized: ${authCheck.reason || 'Valid owner Personal Access Token or access key is required.'}`,
     });
   }
 
@@ -255,6 +262,8 @@ app.post('/api/ingest', async (req, res) => {
   if (!input_text || typeof input_text !== 'string') {
     return res.status(400).json({ error: 'Please provide a valid repository URL or path' });
   }
+
+  if (process.env.INGEST_WORKER_URL) return submitWorkerJob(req, res);
 
   const activeToken = (bearerToken || token || process.env.GITHUB_TOKEN || '').trim();
 

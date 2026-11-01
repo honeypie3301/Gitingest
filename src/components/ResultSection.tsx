@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer, Eye, EyeOff } from 'lucide-react';
 import { IngestResponse } from '../types';
 import { IngestionTimer, formatDuration } from './IngestionTimer';
+import { artifactUrl, fullDigestSection } from '../services/digestExport';
 
 // Threshold above which we avoid mounting a single giant string into a DOM textarea to prevent tab crashes
 const MAX_PREVIEW_CHARS = 200_000; // ~200k chars for preview (~50k tokens)
@@ -25,27 +26,57 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
 }) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
   const [showFullPreview, setShowFullPreview] = useState(false);
+  const [loadedContent, setLoadedContent] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  useEffect(() => {
+    setLoadedContent(null);
+    setShowFullPreview(false);
+    setActionError(null);
+  }, [result]);
 
   const isHugeContent = useMemo(() => {
-    return Boolean(result?.content && result.content.length > MAX_PREVIEW_CHARS);
-  }, [result?.content]);
+    return Boolean(result?.content_preview_truncated || (result?.content && result.content.length > MAX_PREVIEW_CHARS));
+  }, [result?.content, result?.content_preview_truncated]);
 
   const displayedContent = useMemo(() => {
     if (!result?.content) return '';
-    if (!isHugeContent || showFullPreview) return result.content;
-    return `${result.content.slice(0, MAX_PREVIEW_CHARS)}\n\n--- [PREVIEW TRUNCATED TO PREVENT BROWSER FREEZE: Remaining ${(result.content.length - MAX_PREVIEW_CHARS).toLocaleString()} characters omitted from preview. Use 'Copy Digest' or 'Download' to get the full file] ---`;
-  }, [result?.content, isHugeContent, showFullPreview]);
+    if (showFullPreview) return loadedContent ?? result.content;
+    if (!isHugeContent) return result.content;
+    return `${result.content.slice(0, MAX_PREVIEW_CHARS)}\n\n--- [PREVIEW TRUNCATED TO PREVENT BROWSER FREEZE: Remaining ${((result.content_chars ?? result.content.length) - MAX_PREVIEW_CHARS).toLocaleString()} characters omitted from preview. Use 'Copy Digest' or 'Download' to get the full file] ---`;
+  }, [result?.content, result?.content_chars, isHugeContent, showFullPreview, loadedContent]);
 
-  const handleCopy = (text: string, sectionName: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedSection(sectionName);
-    setTimeout(() => {
-      setCopiedSection((curr) => (curr === sectionName ? null : curr));
-    }, 2000);
+  const handleCopy = async (sectionName: 'all' | 'tree' | 'content') => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(await fullDigestSection(result, sectionName));
+      setActionError(null);
+      setCopiedSection(sectionName);
+      setTimeout(() => {
+        setCopiedSection((curr) => (curr === sectionName ? null : curr));
+      }, 2000);
+    } catch (error: any) { setActionError(error.message || 'Unable to copy. Use Download instead.'); }
   };
 
-  const handleDownload = () => {
+  const toggleFullPreview = async () => {
+    if (showFullPreview) { setShowFullPreview(false); return; }
+    try {
+      if (result?.content_preview_truncated && loadedContent === null) setLoadedContent(await fullDigestSection(result, 'content'));
+      setShowFullPreview(true);
+    } catch (error: any) { setActionError(error.message); }
+  };
+
+  const handleDownload = async () => {
     if (!result) return;
+    if (result.artifact_url) {
+      const link = document.createElement('a');
+      try { link.href = await artifactUrl(result); }
+      catch (error: any) { setActionError(error.message); return; }
+      link.download = `${(result.repo_name || 'repository').replace(/\//g, '_')}_digest.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
     const fullText = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
     const filename = `${(result.repo_name || 'repository').replace(/\//g, '_')}_digest.txt`;
     const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
@@ -115,10 +146,9 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
 
   if (!result) return null;
 
-  const fullDigest = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
-
   return (
     <div className="w-full max-w-6xl 2xl:max-w-7xl mx-auto mt-8 px-2 sm:px-4 space-y-6">
+      {actionError && <p role="alert" className="text-red-300">{actionError}</p>}
       {/* Quick Metrics Bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#161b22] border-2 border-[#30363d] rounded-xl p-3 flex items-center gap-2.5 shadow-[2px_2px_0_0_#000000]">
@@ -149,7 +179,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => handleCopy(fullDigest, 'all')}
+            onClick={() => handleCopy('all')}
             className="flex-1 h-full py-2.5 px-3 bg-amber-500 hover:bg-amber-400 border-2 border-amber-600 text-gray-950 font-extrabold rounded-xl text-xs sm:text-sm transition-transform active:translate-y-0.5 shadow-[2px_2px_0_0_#000000] flex items-center justify-center gap-1.5 cursor-pointer"
           >
             {copiedSection === 'all' ? (
@@ -215,7 +245,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
                   <span>Directory Structure</span>
                 </h3>
                 <button
-                  onClick={() => handleCopy(result.tree, 'tree')}
+                  onClick={() => handleCopy('tree')}
                   className="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-amber-400 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1.5 cursor-pointer"
                 >
                   {copiedSection === 'tree' ? (
@@ -236,6 +266,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
                 <div className="w-full h-full rounded bg-black translate-y-1 translate-x-1 absolute inset-0"></div>
                 <div className="w-full h-full min-h-[220px] max-h-[360px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm overflow-auto relative z-10 text-emerald-400 whitespace-pre">
                   {result.tree}
+                  {result.tree_preview_truncated && '\n[Tree preview limited. Copy Tree or Download includes the complete tree.]'}
                 </div>
               </div>
             </div>
@@ -249,14 +280,14 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
                 <span>Files Content</span>
                 {isHugeContent && (
                   <span className="text-xs font-mono font-bold text-amber-400 bg-amber-950/40 border border-amber-600/50 px-2 py-0.5 rounded">
-                    Large Digest ({((result.content?.length || 0) / (1024 * 1024)).toFixed(1)}MB)
+                    Large Digest ({(((result.content_chars ?? result.content?.length) || 0) / (1024 * 1024)).toFixed(1)}MB)
                   </span>
                 )}
               </h3>
               <div className="flex items-center gap-2">
                 {isHugeContent && (
                   <button
-                    onClick={() => setShowFullPreview(!showFullPreview)}
+                    onClick={toggleFullPreview}
                     className="px-2.5 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-gray-300 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1 cursor-pointer"
                     title={showFullPreview ? "Show trimmed preview to reduce memory" : "Load entire string in preview"}
                   >
@@ -274,7 +305,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
                   </button>
                 )}
                 <button
-                  onClick={() => handleCopy(result.content, 'content')}
+                  onClick={() => handleCopy('content')}
                   className="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-amber-400 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1.5 cursor-pointer"
                 >
                   {copiedSection === 'content' ? (

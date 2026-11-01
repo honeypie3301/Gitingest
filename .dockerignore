@@ -70,3 +70,5 @@ Dockerfile*
 # -------------------------------------------------
 !pyproject.toml
 !src/
+.ingest-data/
+node_modules/

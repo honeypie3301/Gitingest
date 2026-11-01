@@ -1,3 +1,5 @@
+import { githubRateLimitMessage } from '../src/services/githubRateLimit';
+
 const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').toLowerCase();
 const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
 const OWNER_ACCESS_KEY = (process.env.OWNER_ACCESS_KEY || process.env.OWNER_PASSPHRASE || 'honeypie3301-84184414').trim();
@@ -48,6 +50,9 @@ export default async function handler(req: any, res: any) {
         },
       });
     }
+
+    const rateLimit = await githubRateLimitMessage(ghRes);
+    if (rateLimit) return res.status(429).json({ success: false, error: rateLimit });
 
     if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
       const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/gitingest`, {

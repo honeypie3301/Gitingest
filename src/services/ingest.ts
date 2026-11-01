@@ -1,5 +1,6 @@
 import { IngestRequest, IngestResponse, TokenStatus, GitHubUser } from '../types';
 import { ingestViaGitHubApi } from './githubApi';
+import { waitForWorkerJob } from './workerJobs';
 
 const SAVED_PAT_KEY = 'gitingest_custom_pat';
 const AUTO_INJECT_KEY = 'gitingest_auto_inject_pat';
@@ -177,6 +178,8 @@ export async function checkServerTokenStatus(): Promise<TokenStatus> {
  * Ingest repository via server API or client-side GitHub fallback.
  */
 export async function performIngest(request: IngestRequest, signal?: AbortSignal): Promise<IngestResponse> {
+  let workerStarted = false;
+  let backendResponded = false;
   const savedToken = getSavedToken();
   const autoInject = getAutoInjectToken();
 
@@ -200,10 +203,15 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
       body: JSON.stringify(payload),
       signal,
     });
+    backendResponded = response.headers.get('content-type')?.includes('application/json') || false;
 
     if (response.ok) {
       const data = await response.json();
-      if (data && data.tree && data.content) {
+      if (data?.id && data?.state) {
+        workerStarted = true;
+        return await waitForWorkerJob(data, headers, signal);
+      }
+      if (data && typeof data.tree === 'string' && typeof data.content === 'string') {
         return data;
       }
     }
@@ -213,6 +221,11 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
       throw new Error(errData.error || 'Unauthorized: Valid owner credentials required.');
     }
 
+    if (response.status === 429 || response.status >= 500) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Ingestion service unavailable or rate limited. Please retry later.');
+    }
+
     if (response.headers.get('content-type')?.includes('application/json')) {
       const errData = await response.json();
       throw new Error(errData.error || errData.message || 'Ingestion failed on server');
@@ -220,6 +233,7 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
 
     console.warn('Backend API returned non-200. Falling back to client-side GitHub REST API...');
   } catch (err: any) {
+    if (workerStarted || backendResponded) throw err;
     if (signal?.aborted || err.name === 'AbortError') {
       throw err;
     }
