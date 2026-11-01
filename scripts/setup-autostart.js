@@ -17,10 +17,11 @@ const startupDir = process.platform === 'win32'
   : null;
 
 // 2. Generate the silent VBScript launcher in the project root
+// Optimized: V8 GC exposure + max memory cap
 const vbsContent = `' GitIngest Background Silent Launcher
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "${projectDir.replace(/\\/g, '\\\\')}"
-WshShell.Run "cmd /c npx tsx server.ts", 0, False
+WshShell.Run "cmd /c npx tsx --expose-gc --max-old-space-size=1024 server.ts", 0, False
 `;
 
 const projectVbsPath = path.join(projectDir, 'start-background.vbs');

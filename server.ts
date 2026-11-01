@@ -692,6 +692,14 @@ app.post('/api/ingest', async (req, res) => {
     } catch (cleanErr) {
       console.error('Failed to cleanup temp dir:', cleanErr);
     }
+    // Memory optimization: Prompt V8 to free memory after large digest payloads
+    if (typeof global.gc === 'function') {
+      setImmediate(() => {
+        try {
+          global.gc!();
+        } catch {}
+      });
+    }
   }
 });
 
@@ -743,18 +751,31 @@ function buildAsciiTree(rootName: string, paths: string[]): string {
 }
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  // Cleanup any orphaned temp directories from previous crashes/reboots
+  try {
+    const tmp = os.tmpdir();
+    const files = await fsPromises.readdir(tmp);
+    for (const f of files) {
+      if (f.startsWith('gitingest_')) {
+        await fsPromises.rm(path.join(tmp, f), { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  } catch {}
+
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+
+  if (process.env.NODE_ENV === 'production' || hasDist) {
+    app.use(express.static(distPath, { maxAge: '1d' }));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   app.listen(Number(PORT), '0.0.0.0', () => {
