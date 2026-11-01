@@ -90,9 +90,51 @@ function buildAsciiTree(rootName: string, paths: string[]): string {
   return `└── ${rootName}/\n${render(root, '    ')}`;
 }
 
+const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').toLowerCase();
+const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
+const OWNER_ACCESS_KEY = (process.env.OWNER_ACCESS_KEY || process.env.OWNER_PASSPHRASE || 'honeypie3301-84184414').trim();
+
+async function checkOwnerAuth(tokenOrKey?: string): Promise<{ authorized: boolean; reason?: string }> {
+  if (!tokenOrKey || !tokenOrKey.trim()) {
+    return { authorized: false, reason: 'No authorization credentials provided.' };
+  }
+  const clean = tokenOrKey.trim();
+  if (OWNER_ACCESS_KEY && clean === OWNER_ACCESS_KEY) {
+    return { authorized: true };
+  }
+  try {
+    const ghRes = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${clean}`,
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'GitIngest-OwnerAuth',
+      },
+    });
+    if (!ghRes.ok) return { authorized: false, reason: 'Invalid GitHub token' };
+    const user = await ghRes.json();
+    const isLoginMatch = user.login && user.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+    const isIdMatch = !OWNER_GITHUB_ID || user.id === OWNER_GITHUB_ID;
+    if (isLoginMatch && isIdMatch) return { authorized: true };
+    return { authorized: false, reason: `Token belongs to @${user.login}, not owner @${OWNER_GITHUB_LOGIN}.` };
+  } catch {
+    return { authorized: false, reason: 'Failed to verify token with GitHub.' };
+  }
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const authHeader = req.headers?.authorization;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
+  const incomingAuth = bearerToken || req.body?.token || process.env.GITHUB_TOKEN;
+
+  const authCheck = await checkOwnerAuth(incomingAuth);
+  if (!authCheck.authorized) {
+    return res.status(401).json({
+      error: `Unauthorized: ${authCheck.reason || 'Valid owner Personal Access Token or access key is required.'}`,
+    });
   }
 
   const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token } = req.body || {};
@@ -107,7 +149,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const { owner, repo } = parsed;
-  const activeToken = (token || process.env.GITHUB_TOKEN || '').trim();
+  const activeToken = (bearerToken || token || process.env.GITHUB_TOKEN || '').trim();
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',

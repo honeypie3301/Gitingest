@@ -69,31 +69,43 @@ export function savePatterns(type: 'exclude' | 'include', pattern: string, maxFi
 
 export const OWNER_GITHUB_LOGIN = 'honeypie3301';
 export const OWNER_GITHUB_ID = 84184414;
-export const OWNER_NODE_ID = 'MDQ6VXNlcjg0MTg0NDE0';
-export const OWNER_BACKUP_KEY = 'honeypie3301-84184414';
 
 export function isVerifiedOwner(user: GitHubUser | null | undefined): boolean {
   if (!user || !user.login) return false;
   const loginMatch = user.login.toLowerCase() === OWNER_GITHUB_LOGIN.toLowerCase();
   if (!loginMatch) return false;
-  // Backup verification: prevent username collisions or spoofing by verifying immutable GitHub user ID
   if (user.id !== undefined && user.id !== OWNER_GITHUB_ID) {
-    return false;
-  }
-  if (user.node_id && user.node_id !== OWNER_NODE_ID) {
     return false;
   }
   return true;
 }
 
-export function verifyBackupKey(input: string): boolean {
+/**
+ * Verifies credentials directly against server-side authorization API.
+ * No secret keys or backup passwords are baked into client-side code.
+ */
+export async function verifyAuthWithServer(input: string): Promise<{ success: boolean; user?: GitHubUser; error?: string }> {
   const clean = input.trim();
-  if (!clean) return false;
-  return (
-    clean === OWNER_BACKUP_KEY ||
-    clean.toLowerCase() === OWNER_GITHUB_LOGIN.toLowerCase() ||
-    clean === String(OWNER_GITHUB_ID)
-  );
+  if (!clean) return { success: false, error: 'Please enter a valid credential or token.' };
+
+  try {
+    const res = await fetch('/api/verify-auth', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ auth: clean }),
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return { success: true, user: data.user };
+    }
+
+    return { success: false, error: data.error || 'Authentication rejected by server.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Network error while contacting authentication server.' };
+  }
 }
 
 const UNLOCKED_SESSION_KEY = 'gitingest_owner_unlocked';
@@ -139,14 +151,21 @@ export function setOwnerPin(_pin: string): void {}
  * Fetch token and user status from server.
  */
 export async function checkServerTokenStatus(): Promise<TokenStatus> {
+  const saved = getSavedToken();
+
   try {
-    const res = await fetch('/api/user-status');
+    const headers: Record<string, string> = {};
+    if (saved) {
+      headers.Authorization = `Bearer ${saved}`;
+    }
+
+    const res = await fetch('/api/user-status', { headers });
     if (res.ok) {
       const data = await res.json();
-      if (data.configured) {
+      if (data.configured && data.authorized) {
         return {
           configured: true,
-          source: 'server_env',
+          source: saved ? 'saved_pat' : 'server_env',
           user: data.user,
         };
       }
@@ -155,7 +174,6 @@ export async function checkServerTokenStatus(): Promise<TokenStatus> {
     // fallback
   }
 
-  const saved = getSavedToken();
   if (saved) {
     return {
       configured: true,
@@ -183,12 +201,17 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
     token: tokenToUse,
   };
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (tokenToUse) {
+    headers.Authorization = `Bearer ${tokenToUse}`;
+  }
+
   try {
     const response = await fetch('/api/ingest', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(payload),
       signal,
     });
@@ -198,6 +221,11 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
       if (data && data.tree && data.content) {
         return data;
       }
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || 'Unauthorized: Valid owner credentials required.');
     }
 
     if (response.headers.get('content-type')?.includes('application/json')) {

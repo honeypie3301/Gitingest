@@ -10,7 +10,7 @@ import {
   getSavedToken,
   setSavedToken,
   isVerifiedOwner,
-  verifyBackupKey,
+  verifyAuthWithServer,
   isSessionUnlocked,
   setSessionUnlocked,
   OWNER_GITHUB_LOGIN,
@@ -89,30 +89,14 @@ export default function App() {
     setIsVerifyingAuth(true);
 
     try {
-      // 1. Check if backup key was entered
-      if (verifyBackupKey(input)) {
-        setSessionUnlocked(true);
-        setIsLocked(false);
-        setAuthError(null);
-        setAuthInput('');
+      // Authenticate directly with the server backend
+      const authRes = await verifyAuthWithServer(input);
+      if (!authRes.success) {
+        setAuthError(authRes.error || 'Authentication rejected by server.');
         return;
       }
 
-      // 2. Otherwise verify as GitHub Personal Access Token
-      const user = await verifyGitHubToken(input);
-      if (!user) {
-        setAuthError('Invalid GitHub token or failed to verify. You can also enter your backup key.');
-        return;
-      }
-
-      if (!isVerifiedOwner(user)) {
-        setAuthError(
-          `Unauthorized: Signed in as @${user.login} (ID: ${user.id ?? 'unknown'}). This instance is strictly restricted to @${OWNER_GITHUB_LOGIN} (ID: ${OWNER_GITHUB_ID}).`
-        );
-        return;
-      }
-
-      // Validated as owner
+      // Validated as owner on the server
       setSavedToken(input);
       setSessionUnlocked(true);
       setIsLocked(false);
@@ -121,10 +105,10 @@ export default function App() {
       setTokenStatus({
         configured: true,
         source: 'saved_pat',
-        user,
+        user: authRes.user || null,
       });
     } catch {
-      setAuthError('Network error while verifying GitHub account. Please try again or use the backup key.');
+      setAuthError('Network error while connecting to authentication server. Please try again.');
     } finally {
       setIsVerifyingAuth(false);
     }
@@ -168,6 +152,10 @@ export default function App() {
       if (err.name === 'AbortError' || abortController.signal.aborted || err.message?.includes('cancelled')) {
         setError('Ingestion was cancelled.');
       } else {
+        if (err.message?.includes('Unauthorized')) {
+          setSessionUnlocked(false);
+          setIsLocked(true);
+        }
         setError(err.message || 'An unexpected error occurred while ingesting the repository.');
       }
     } finally {
@@ -216,13 +204,13 @@ export default function App() {
                 <form onSubmit={handleUnlock} className="space-y-4">
                   <div>
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-300 mb-1.5 text-left">
-                      GitHub PAT or Emergency Backup Key
+                      GitHub PAT or Secret Access Key
                     </label>
                     <input
                       type="password"
                       value={authInput}
                       onChange={(e) => setAuthInput(e.target.value)}
-                      placeholder="ghp_... or emergency backup key"
+                      placeholder="ghp_... or secret access key"
                       required
                       className="w-full px-4 py-2.5 bg-[#0d1117] border-2 border-[#30363d] focus:border-amber-400 rounded-lg text-white font-mono text-sm focus:outline-none placeholder-gray-500"
                     />
@@ -242,7 +230,7 @@ export default function App() {
                     {isVerifyingAuth ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Verifying with GitHub...</span>
+                        <span>Verifying with Server...</span>
                       </>
                     ) : (
                       <>
@@ -253,7 +241,7 @@ export default function App() {
                   </button>
 
                   <div className="pt-2 text-[11px] text-gray-400 leading-normal text-left bg-[#0d1117] p-2.5 rounded-lg border border-[#30363d]">
-                    <span className="font-bold text-gray-200">Security note:</span> Authenticating verifies your GitHub username and unique permanent ID (<code className="text-amber-400">84184414</code>). If offline, enter your emergency backup key.
+                    <span className="font-bold text-gray-200">Security note:</span> Authenticating validates your credentials against server middleware. Unauthorized API calls are rejected with HTTP 401.
                   </div>
                 </form>
               </div>

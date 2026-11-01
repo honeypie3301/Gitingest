@@ -39,52 +39,177 @@ function isBinaryExtension(filePath: string): boolean {
   return ext ? BINARY_EXTENSIONS.has(ext) : false;
 }
 
-// User & Token Status Endpoint
-app.get('/api/user-status', async (_req, res) => {
-  const envToken = process.env.GITHUB_TOKEN;
-  if (!envToken) {
-    return res.json({ configured: false, user: null });
+const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').toLowerCase();
+const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
+const OWNER_ACCESS_KEY = (process.env.OWNER_ACCESS_KEY || process.env.OWNER_PASSPHRASE || 'honeypie3301-84184414').trim();
+
+// In-memory token cache to prevent GitHub rate-limiting on repeated requests
+interface VerifiedTokenCache {
+  isOwner: boolean;
+  user: any;
+  cachedAt: number;
+}
+const tokenCache = new Map<string, VerifiedTokenCache>();
+const TOKEN_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+// Rate Limiter
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+const rateLimits = new Map<string, RateLimitEntry>();
+
+function checkRateLimit(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const entry = rateLimits.get(key);
+  if (!entry || now > entry.resetAt) {
+    rateLimits.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (entry.count >= limit) {
+    return false;
+  }
+  entry.count++;
+  return true;
+}
+
+// Helper to verify if a token or secret is authorized as the owner
+async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized: boolean; user?: any; reason?: string }> {
+  if (!tokenOrKey || !tokenOrKey.trim()) {
+    return { authorized: false, reason: 'No authorization credentials provided.' };
   }
 
+  const clean = tokenOrKey.trim();
+
+  // 1. Direct match with configured server secret / access key
+  if (OWNER_ACCESS_KEY && clean === OWNER_ACCESS_KEY) {
+    return {
+      authorized: true,
+      user: {
+        login: OWNER_GITHUB_LOGIN,
+        id: OWNER_GITHUB_ID,
+        name: 'Owner',
+        avatar_url: '',
+      },
+    };
+  }
+
+  // 2. Check token cache
+  const cached = tokenCache.get(clean);
+  const now = Date.now();
+  if (cached && now - cached.cachedAt < TOKEN_CACHE_TTL) {
+    if (cached.isOwner) {
+      return { authorized: true, user: cached.user };
+    }
+    return { authorized: false, reason: 'Token is not authorized as owner.' };
+  }
+
+  // 3. Verify GitHub Token via GitHub API
   try {
     const ghRes = await fetch('https://api.github.com/user', {
       headers: {
-        Authorization: `Bearer ${envToken.trim()}`,
+        Authorization: `Bearer ${clean}`,
         Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'GitIngest-Custom',
+        'User-Agent': 'GitIngest-OwnerAuth',
       },
     });
 
-    if (ghRes.ok) {
-      const data = await ghRes.json();
-      return res.json({
-        configured: true,
-        user: {
-          id: data.id,
-          node_id: data.node_id,
-          login: data.login,
-          avatar_url: data.avatar_url,
-          name: data.name,
-          html_url: data.html_url,
-        },
-      });
+    if (!ghRes.ok) {
+      tokenCache.set(clean, { isOwner: false, user: null, cachedAt: now });
+      return { authorized: false, reason: 'Invalid GitHub token or authentication failed.' };
     }
 
-    return res.json({ configured: true, user: null });
-  } catch {
-    return res.json({ configured: true, user: null });
+    const userData = await ghRes.json();
+    const isLoginMatch = userData.login && userData.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+    const isIdMatch = !OWNER_GITHUB_ID || userData.id === OWNER_GITHUB_ID;
+
+    if (isLoginMatch && isIdMatch) {
+      const user = {
+        id: userData.id,
+        node_id: userData.node_id,
+        login: userData.login,
+        avatar_url: userData.avatar_url,
+        name: userData.name,
+        html_url: userData.html_url,
+      };
+      tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+      return { authorized: true, user };
+    }
+
+    tokenCache.set(clean, { isOwner: false, user: null, cachedAt: now });
+    return {
+      authorized: false,
+      reason: `Unauthorized: Token belongs to @${userData.login}, not instance owner @${OWNER_GITHUB_LOGIN}.`,
+    };
+  } catch (err: any) {
+    return { authorized: false, reason: `Failed to verify token: ${err.message}` };
   }
+}
+
+// Server-side Authentication Endpoint
+app.post('/api/verify-auth', async (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  if (!checkRateLimit(`auth:${ip}`, 10, 5 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many authentication attempts. Please try again in 5 minutes.' });
+  }
+
+  const { auth } = req.body || {};
+  if (!auth || typeof auth !== 'string') {
+    return res.status(400).json({ error: 'Authentication token or access key required' });
+  }
+
+  const check = await verifyOwnerCredentials(auth);
+  if (check.authorized) {
+    return res.json({ success: true, user: check.user });
+  }
+
+  return res.status(401).json({ success: false, error: check.reason || 'Invalid credentials' });
+});
+
+// User & Token Status Endpoint
+app.get('/api/user-status', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
+  const tokenToCheck = bearerToken || process.env.GITHUB_TOKEN;
+
+  if (!tokenToCheck) {
+    return res.json({ configured: false, user: null, authorized: false });
+  }
+
+  const check = await verifyOwnerCredentials(tokenToCheck);
+  return res.json({
+    configured: true,
+    authorized: check.authorized,
+    user: check.user || null,
+  });
 });
 
 // High-speed Ingest Endpoint
 app.post('/api/ingest', async (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  if (!checkRateLimit(`ingest:${ip}`, 30, 60 * 1000)) {
+    return res.status(429).json({ error: 'Rate limit exceeded: max 30 ingestions per minute.' });
+  }
+
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
+  const incomingToken = bearerToken || req.body.token || process.env.GITHUB_TOKEN;
+
+  // Enforce server-side authorization
+  const authCheck = await verifyOwnerCredentials(incomingToken);
+  if (!authCheck.authorized) {
+    return res.status(401).json({
+      error: `Unauthorized: ${authCheck.reason || 'Valid owner Personal Access Token or access key is required.'}`,
+    });
+  }
+
   const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token } = req.body;
 
   if (!input_text || typeof input_text !== 'string') {
     return res.status(400).json({ error: 'Please provide a valid repository URL or path' });
   }
 
-  const activeToken = (token || process.env.GITHUB_TOKEN || '').trim();
+  const activeToken = (bearerToken || token || process.env.GITHUB_TOKEN || '').trim();
 
   let clean = input_text.trim();
   clean = clean.replace(/^https?:\/\//i, '');

@@ -8,7 +8,6 @@ import {
   setAutoInjectToken,
   OWNER_GITHUB_LOGIN,
   OWNER_GITHUB_ID,
-  OWNER_BACKUP_KEY,
   isVerifiedOwner,
 } from '../services/ingest';
 import { GitHubUser } from '../types';
@@ -256,13 +255,10 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
               </div>
 
               <div className="p-3.5 bg-amber-950/20 border-2 border-amber-600/40 rounded-lg text-xs space-y-1.5">
-                <span className="font-bold text-amber-300 block">Emergency Backup Key</span>
-                <p className="text-gray-300 text-[11px]">
-                  If you are on an external device without a GitHub PAT or GitHub API is unreachable:
+                <span className="font-bold text-amber-300 block">Server-Side Secret Access Key</span>
+                <p className="text-gray-300 text-[11px] leading-relaxed">
+                  Configured via <code className="text-amber-400">OWNER_ACCESS_KEY</code> in your deployment environment variables (.env / Vercel). Verified strictly on the server to prevent exposure.
                 </p>
-                <div className="p-2 bg-[#0d1117] border border-[#30363d] rounded font-mono text-xs text-amber-400 select-all">
-                  {OWNER_BACKUP_KEY}
-                </div>
               </div>
             </div>
           )}
