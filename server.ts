@@ -6,7 +6,7 @@ import { promisify } from 'util';
 import os from 'os';
 import dotenv from 'dotenv';
 import JSZip from 'jszip';
-import { handleWorkerJob, submitWorkerJob } from './lib/worker-proxy';
+import { handleWorkerJob, submitWorkerJob } from './lib/worker-proxy.ts';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
