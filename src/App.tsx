@@ -11,8 +11,6 @@ import {
   setSavedToken,
   isVerifiedOwner,
   verifyAuthWithServer,
-  isSessionUnlocked,
-  setSessionUnlocked,
   OWNER_GITHUB_LOGIN,
   OWNER_GITHUB_ID,
 } from './services/ingest';
@@ -43,36 +41,32 @@ export default function App() {
     const status = await checkServerTokenStatus();
     setTokenStatus(status);
 
-    if (isSessionUnlocked()) {
+    // If server env has authenticated owner
+    if (status.configured && status.user && isVerifiedOwner(status.user)) {
       setIsLocked(false);
       return;
     }
 
-    if (status.user && isVerifiedOwner(status.user)) {
-      setSessionUnlocked(true);
-      setIsLocked(false);
-      return;
-    }
-
+    // If client has a saved token/key, verify it directly against server auth
     const savedPat = getSavedToken();
     if (savedPat) {
       try {
-        const user = await verifyGitHubToken(savedPat);
-        if (user && isVerifiedOwner(user)) {
-          setSessionUnlocked(true);
+        const authRes = await verifyAuthWithServer(savedPat);
+        if (authRes.success && authRes.user && isVerifiedOwner(authRes.user)) {
           setIsLocked(false);
           setTokenStatus({
             configured: true,
             source: 'saved_pat',
-            user,
+            user: authRes.user,
           });
           return;
         }
       } catch {
-        // Fall through to lock
+        // Fall through to locked state
       }
     }
 
+    // Without a verified credential recognized by the server, remain locked
     setIsLocked(true);
   };
 
@@ -98,7 +92,6 @@ export default function App() {
 
       // Validated as owner on the server
       setSavedToken(input);
-      setSessionUnlocked(true);
       setIsLocked(false);
       setAuthError(null);
       setAuthInput('');
@@ -115,7 +108,8 @@ export default function App() {
   };
 
   const handleManualLock = () => {
-    setSessionUnlocked(false);
+    setSavedToken('');
+    setTokenStatus({ configured: false, source: 'none', user: null });
     setIsLocked(true);
   };
 
@@ -153,7 +147,7 @@ export default function App() {
         setError('Ingestion was cancelled.');
       } else {
         if (err.message?.includes('Unauthorized')) {
-          setSessionUnlocked(false);
+          setSavedToken('');
           setIsLocked(true);
         }
         setError(err.message || 'An unexpected error occurred while ingesting the repository.');

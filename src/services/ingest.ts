@@ -108,27 +108,12 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
   }
 }
 
-const UNLOCKED_SESSION_KEY = 'gitingest_owner_unlocked';
-
+// Session state is strictly validated via server auth credentials, not client sessionStorage flags
 export function isSessionUnlocked(): boolean {
-  try {
-    return sessionStorage.getItem(UNLOCKED_SESSION_KEY) === 'true';
-  } catch {
-    return false;
-  }
+  return false;
 }
 
-export function setSessionUnlocked(unlocked: boolean): void {
-  try {
-    if (unlocked) {
-      sessionStorage.setItem(UNLOCKED_SESSION_KEY, 'true');
-    } else {
-      sessionStorage.removeItem(UNLOCKED_SESSION_KEY);
-    }
-  } catch (e) {
-    console.error('Failed to update session unlock state', e);
-  }
-}
+export function setSessionUnlocked(_unlocked: boolean): void {}
 
 // Backward compatibility helpers
 export function isLockEnabled(): boolean {
@@ -136,7 +121,7 @@ export function isLockEnabled(): boolean {
 }
 
 export function resetOwnerLock(): void {
-  setSessionUnlocked(false);
+  setSavedToken('');
 }
 
 export function setLockEnabled(_enabled: boolean): void {}

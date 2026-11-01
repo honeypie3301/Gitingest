@@ -454,14 +454,25 @@ app.post('/api/ingest', async (req, res) => {
       ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git`
       : `https://github.com/${owner}/${repo}.git`;
 
-    const cloneArgs = ['clone', '--depth', '1', '--single-branch', '--no-tags'];
+    // 1. Optimization: Blobless clone (--filter=blob:none) to skip multi-GB blobs
+    const cloneArgs = [
+      'clone',
+      '--depth', '1',
+      '--filter=blob:none',
+      '--single-branch',
+      '--no-tags',
+    ];
+    if (subpath) {
+      cloneArgs.push('--sparse');
+    }
     if (branch) {
       cloneArgs.push('-b', branch);
     }
     cloneArgs.push(cloneUrl, tempDir);
 
     try {
-      await execFileAsync('git', cloneArgs, { timeout: 60000 });
+      // 5-minute timeout instead of 60s
+      await execFileAsync('git', cloneArgs, { timeout: 300000 });
     } catch (gitErr: any) {
       const errMsg = gitErr.stderr || gitErr.message || '';
       if (errMsg.includes('could not read Username') || errMsg.includes('Authentication failed') || errMsg.includes('Repository not found')) {
@@ -469,7 +480,25 @@ app.post('/api/ingest', async (req, res) => {
           error: `Could not access repository "${owner}/${repo}". If this is a private repository, please ensure your GitHub Personal Access Token is configured with 'repo' scope.`,
         });
       }
-      throw new Error(`Git clone failed: ${errMsg.slice(0, 300)}`);
+
+      // Fallback: if server rejects --filter=blob:none, retry standard shallow clone
+      if (errMsg.includes('filter') || errMsg.includes('unknown option')) {
+        const fallbackArgs = ['clone', '--depth', '1', '--single-branch', '--no-tags'];
+        if (branch) fallbackArgs.push('-b', branch);
+        fallbackArgs.push(cloneUrl, tempDir);
+        await execFileAsync('git', fallbackArgs, { timeout: 300000 });
+      } else {
+        throw new Error(`Git clone failed: ${errMsg.slice(0, 300)}`);
+      }
+    }
+
+    // 2. Optimization: Sparse-checkout for subpaths
+    if (subpath) {
+      try {
+        await execFileAsync('git', ['-C', tempDir, 'sparse-checkout', 'set', subpath], { timeout: 30000 });
+      } catch {
+        // Continue if sparse-checkout is already active or unsupported
+      }
     }
 
     const targetRoot = subpath ? path.join(tempDir, subpath) : tempDir;
@@ -512,13 +541,20 @@ app.post('/api/ingest', async (req, res) => {
     const paths = collectedFiles.map((f) => f.relPath);
     const treeText = buildAsciiTree(subpath || repo, paths);
 
-    // High-speed parallel chunked file reading
-    const CHUNK_SIZE = 50;
+    // 3. Optimization: Memory-safe chunked reading avoiding V8 string heap stalls
+    const CHUNK_SIZE = 100;
     const fileContents: string[] = [];
     let totalChars = 0;
+    const MAX_DIGEST_CHARS = 250 * 1024 * 1024; // 250MB string limit to prevent V8 GC freeze
+    let isTruncated = false;
 
     for (let i = 0; i < collectedFiles.length; i += CHUNK_SIZE) {
       if (clientDisconnected) return;
+      if (totalChars >= MAX_DIGEST_CHARS) {
+        isTruncated = true;
+        break;
+      }
+
       const chunk = collectedFiles.slice(i, i + CHUNK_SIZE);
       const readResults = await Promise.all(
         chunk.map(async (file) => {
@@ -543,8 +579,16 @@ app.post('/api/ingest', async (req, res) => {
           fileContents.push(
             `================================================\nFile: ${resItem.relPath}\n================================================\n${resItem.content}\n`
           );
+          if (totalChars >= MAX_DIGEST_CHARS) {
+            isTruncated = true;
+            break;
+          }
         }
       }
+    }
+
+    if (isTruncated) {
+      fileContents.push(`\n[Notice: Codebase digest capped at 250MB to ensure memory stability.]\n`);
     }
 
     const fullContent = fileContents.join('\n');
@@ -557,6 +601,7 @@ app.post('/api/ingest', async (req, res) => {
       `Files analyzed: ${fileContents.length}`,
       `Estimated tokens: ${estimatedTokens}`,
       `Total characters: ${totalChars.toLocaleString()}`,
+      isTruncated ? `(Digest capped at 250MB for memory stability)` : null,
     ].filter(Boolean);
 
     const summary = summaryParts.join('\n');
