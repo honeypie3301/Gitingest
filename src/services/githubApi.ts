@@ -331,5 +331,7 @@ export async function ingestViaGitHubApi(
     files_analyzed: fileContents.length,
     estimated_tokens: estTokens,
     total_chars: totalChars,
+    mode_switched: true,
+    mode_info: 'Switched to CORS-Safe REST (Rate-limit bypassed)',
   };
 }

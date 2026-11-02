@@ -206,6 +206,13 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
         </div>
       </div>
 
+      {result.mode_info && (
+        <div className="bg-[#161b22] border-2 border-[#30363d] rounded-xl px-4 py-2.5 text-xs font-mono text-amber-400 shadow-[2px_2px_0_0_#000000] flex items-center justify-between">
+          <span className="font-bold uppercase tracking-wider text-gray-400">Mode:</span>
+          <span className="font-semibold text-amber-300">{result.mode_info}</span>
+        </div>
+      )}
+
       {/* Main Container */}
       <div className="relative">
         <div className="w-full h-full absolute inset-0 bg-black rounded-2xl translate-y-2 translate-x-2"></div>

@@ -267,9 +267,112 @@ app.post('/api/ingest', async (req, res) => {
 
   const activeToken = (bearerToken || token || process.env.GITHUB_TOKEN || '').trim();
 
+  const patterns = (pattern as string)
+    .split(/[\n,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const compiledPatterns = patterns.map((pat) => {
+    const escaped = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
+    try {
+      return { regex: new RegExp(escaped, 'i'), raw: pat };
+    } catch {
+      return { regex: null, raw: pat };
+    }
+  });
+
+  const isPathAllowed = (relPath: string): boolean => {
+    if (compiledPatterns.length === 0) return true;
+    const matched = compiledPatterns.some(({ regex, raw }) => (regex ? regex.test(relPath) : relPath.includes(raw)));
+    return pattern_type === 'include' ? matched : !matched;
+  };
+
+  const maxBytes = max_file_size * 1024 * 1024;
+
+  // Local Directory Ingestion Support (Offline, 0 Network Calls, 0 Rate Limit)
+  const potentialLocalPath = input_text.trim();
+  if (fs.existsSync(potentialLocalPath)) {
+    try {
+      const stats = fs.statSync(potentialLocalPath);
+      if (stats.isDirectory()) {
+        const localRoot = path.resolve(potentialLocalPath);
+        const collectedFiles: Array<{ relPath: string; fullPath: string; size: number }> = [];
+
+        function walkLocalDir(currentDir: string) {
+          const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.venv') continue;
+            const full = path.join(currentDir, entry.name);
+            const rel = path.relative(localRoot, full).replace(/\\/g, '/');
+
+            if (entry.isDirectory()) {
+              walkLocalDir(full);
+            } else if (entry.isFile()) {
+              if (isBinaryExtension(rel)) continue;
+              if (!isPathAllowed(rel)) continue;
+              try {
+                const stat = fs.statSync(full);
+                if (stat.size <= maxBytes) {
+                  collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
+                }
+              } catch {}
+            }
+          }
+        }
+
+        walkLocalDir(localRoot);
+
+        const paths = collectedFiles.map((f) => f.relPath);
+        const treeText = buildAsciiTree(path.basename(localRoot), paths);
+
+        const fileContents: string[] = [];
+        let totalChars = 0;
+
+        for (const file of collectedFiles) {
+          try {
+            const buf = fs.readFileSync(file.fullPath);
+            if (isBinaryBuffer(buf)) continue;
+            const content = buf.toString('utf-8');
+            totalChars += content.length;
+            fileContents.push(
+              `================================================\nFile: ${file.relPath}\n================================================\n${content}\n`
+            );
+          } catch {}
+        }
+
+        const estimatedTokens = formatTokenCount(Math.round(totalChars / 4));
+        const summary = [
+          `Local Directory: ${localRoot}`,
+          `Files analyzed: ${fileContents.length}`,
+          `Estimated tokens: ${estimatedTokens}`,
+          `Total characters: ${totalChars.toLocaleString()}`,
+        ].join('\n');
+
+        return res.json({
+          summary,
+          tree: `Directory structure:\n${treeText}`,
+          content: fileContents.join('\n'),
+          repo_name: path.basename(localRoot),
+          files_analyzed: fileContents.length,
+          estimated_tokens: estimatedTokens,
+          total_chars: totalChars,
+          mode_info: 'Local Directory (Offline, 0 Network Calls)',
+        });
+      }
+    } catch (err: any) {
+      console.error('Local directory read error:', err);
+    }
+  }
+
   let clean = input_text.trim();
-  clean = clean.replace(/^https?:\/\//i, '');
-  clean = clean.replace(/^(?:www\.)?(?:github\.com|gitingest\.com)\//i, '');
+  let isSshUrl = false;
+  if (/^git@github\.com:/i.test(clean)) {
+    isSshUrl = true;
+    clean = clean.replace(/^git@github\.com:/i, '');
+  } else {
+    clean = clean.replace(/^https?:\/\//i, '');
+    clean = clean.replace(/^(?:www\.)?(?:github\.com|gitingest\.com)\//i, '');
+  }
   clean = clean.replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '');
 
   const parts = clean.split('/');
@@ -298,32 +401,12 @@ app.post('/api/ingest', async (req, res) => {
     }
   });
 
-  const patterns = (pattern as string)
-    .split(/[\n,]+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  const compiledPatterns = patterns.map((pat) => {
-    const escaped = pat.replace(/\./g, '\\.').replace(/\*/g, '.*');
-    try {
-      return { regex: new RegExp(escaped, 'i'), raw: pat };
-    } catch {
-      return { regex: null, raw: pat };
-    }
-  });
-
-  const isPathAllowed = (relPath: string): boolean => {
-    if (compiledPatterns.length === 0) return true;
-    const matched = compiledPatterns.some(({ regex, raw }) => (regex ? regex.test(relPath) : relPath.includes(raw)));
-    return pattern_type === 'include' ? matched : !matched;
-  };
-
-  const maxBytes = max_file_size * 1024 * 1024;
+  let wasRateLimited = false;
 
   // FAST PATH: In-memory Zipball extraction (0 disk I/O, matching & beating real GitIngest)
   try {
     let resolvedBranch: string = branch || '';
-    let zipRes: Response;
+    let zipRes: Response | undefined;
 
     const zipHeaders: Record<string, string> = {
       'User-Agent': 'GitIngest-Fast',
@@ -335,6 +418,9 @@ app.post('/api/ingest', async (req, res) => {
         headers: zipHeaders,
         signal: abortController.signal,
       });
+      if (zipRes && (zipRes.status === 403 || zipRes.status === 429)) {
+        wasRateLimited = true;
+      }
     } else {
       const repoHeaders: Record<string, string> = {
         Accept: 'application/vnd.github.v3+json',
@@ -354,6 +440,10 @@ app.post('/api/ingest', async (req, res) => {
         }).catch(() => null),
       ]);
 
+      if (repoMetaRes.status === 403 || repoMetaRes.status === 429) {
+        wasRateLimited = true;
+      }
+
       if (repoMetaRes.ok) {
         const repoMetaData = await repoMetaRes.json();
         resolvedBranch = repoMetaData.default_branch || 'main';
@@ -368,6 +458,9 @@ app.post('/api/ingest', async (req, res) => {
           headers: zipHeaders,
           signal: abortController.signal,
         });
+        if (zipRes && (zipRes.status === 403 || zipRes.status === 429)) {
+          wasRateLimited = true;
+        }
       }
     }
 
@@ -474,7 +567,9 @@ app.post('/api/ingest', async (req, res) => {
   const tempDir = path.join(os.tmpdir(), `gitingest_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
 
   try {
-    const cloneUrl = activeToken
+    const cloneUrl = isSshUrl
+      ? `git@github.com:${owner}/${repo}.git`
+      : activeToken
       ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git`
       : `https://github.com/${owner}/${repo}.git`;
 
@@ -679,6 +774,8 @@ app.post('/api/ingest', async (req, res) => {
       files_analyzed: fileContents.length,
       estimated_tokens: estimatedTokens,
       total_chars: totalChars,
+      mode_switched: wasRateLimited,
+      mode_info: wasRateLimited ? 'Switched to Native Git CLI (Rate-limit bypassed)' : (isSshUrl ? 'Native Git CLI (SSH)' : undefined),
     });
   } catch (err: any) {
     if (clientDisconnected) return;

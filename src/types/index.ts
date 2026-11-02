@@ -22,6 +22,8 @@ export interface IngestResponse {
   tree_preview_truncated?: boolean;
   content_offset?: number;
   content_chars?: number;
+  mode_info?: string;
+  mode_switched?: boolean;
   // Browser-only callback; credentials stay in its closure, never in worker metadata.
   refreshArtifactUrl?: () => Promise<string>;
 }
