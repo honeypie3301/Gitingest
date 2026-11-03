@@ -29,10 +29,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
             <div className="flex items-center gap-1.5 sm:gap-2">
               <span className="font-extrabold text-lg sm:text-2xl tracking-tight text-white group-hover:text-amber-400 transition-colors">
-                gitingest
+                gitdigest
               </span>
               <span className="bg-amber-500/20 border border-amber-500/60 px-1.5 py-0.2 rounded text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider">
-                Public
+                2
               </span>
             </div>
           </button>
