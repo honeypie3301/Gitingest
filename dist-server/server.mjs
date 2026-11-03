@@ -1117,6 +1117,7 @@ ${item.content}
 ${treeText}`,
           content: fileContents.join("\n"),
           repo_name: `${owner}/${repo}`,
+          subpath: subpath || void 0,
           files_analyzed: fileContents.length,
           estimated_tokens: estimatedTokens,
           total_chars: totalChars
@@ -1321,6 +1322,7 @@ ${resItem.content}
 ${treeText}`,
       content: fullContent,
       repo_name: `${owner}/${repo}`,
+      subpath: subpath || void 0,
       files_analyzed: fileContents.length,
       estimated_tokens: estimatedTokens,
       total_chars: totalChars,

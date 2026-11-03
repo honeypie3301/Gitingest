@@ -14,6 +14,7 @@ export interface IngestResponse {
   tree: string;
   content: string;
   repo_name?: string;
+  subpath?: string;
   files_analyzed?: number;
   estimated_tokens?: string;
   total_chars?: number;

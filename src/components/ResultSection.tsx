@@ -52,20 +52,32 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
     } catch (error: any) { setActionError(error.message || 'Unable to copy. Use Download instead.'); }
   };
 
+  const getDownloadFilename = () => {
+    if (!result) return 'digest.txt';
+    const baseRepo = (result.repo_name || 'repository').replace(/[\/\\:]/g, '_');
+    if (result.subpath) {
+      const cleanSub = result.subpath.replace(/^[\/\\]+|[\/\\]+$/g, '').replace(/[\/\\:]/g, '_');
+      if (cleanSub) {
+        return `${baseRepo}_${cleanSub}_digest.txt`;
+      }
+    }
+    return `${baseRepo}_digest.txt`;
+  };
+
   const handleDownload = async () => {
     if (!result) return;
+    const filename = getDownloadFilename();
     if (result.artifact_url) {
       const link = document.createElement('a');
       try { link.href = await artifactUrl(result); }
       catch (error: any) { setActionError(error.message); return; }
-      link.download = `${(result.repo_name || 'repository').replace(/\//g, '_')}_digest.txt`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
       return;
     }
     const fullText = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
-    const filename = `${(result.repo_name || 'repository').replace(/\//g, '_')}_digest.txt`;
     const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

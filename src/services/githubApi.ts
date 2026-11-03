@@ -325,6 +325,7 @@ export async function ingestViaGitHubApi(
     tree: `Directory structure:\n${treeText}`,
     content: fileContents.join('\n'),
     repo_name: `${owner}/${repo}`,
+    subpath: parsed.subpath || undefined,
     files_analyzed: fileContents.length,
     estimated_tokens: estTokens,
     total_chars: totalChars,
