@@ -3,7 +3,6 @@ import { Navbar } from './components/Navbar';
 import { GitForm } from './components/GitForm';
 import { ResultSection } from './components/ResultSection';
 import { TokenModal } from './components/TokenModal';
-import { ReposToolbar } from './components/ReposToolbar';
 import { WorkflowTabsBar, WorkflowTab } from './components/WorkflowTabsBar';
 import { SparkleRed, SparkleGreen } from './components/Sparkles';
 import {
@@ -388,13 +387,6 @@ export default function App() {
                 Turn any Git repository into a clean, consolidated text digest for LLMs.
               </p>
             </div>
-
-            {/* Separate Dedicated Repositories Toolbar */}
-            <ReposToolbar
-              repos={userRepos}
-              isLoading={isLoadingRepos}
-              onSelectRepo={handleSelectRepo}
-            />
 
             {/* Workspace Multi-Ingest Tabs Bar */}
             <WorkflowTabsBar
