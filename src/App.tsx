@@ -3,6 +3,8 @@ import { Navbar } from './components/Navbar';
 import { GitForm } from './components/GitForm';
 import { ResultSection } from './components/ResultSection';
 import { TokenModal } from './components/TokenModal';
+import { ReposToolbar } from './components/ReposToolbar';
+import { WorkflowTabsBar, WorkflowTab } from './components/WorkflowTabsBar';
 import { SparkleRed, SparkleGreen } from './components/Sparkles';
 import {
   performIngest,
@@ -14,40 +16,88 @@ import {
   OWNER_GITHUB_LOGIN,
   OWNER_GITHUB_ID,
 } from './services/ingest';
-import { verifyGitHubToken } from './services/githubApi';
+import { fetchUserRepos, RepoSummary } from './services/githubApi';
 import { IngestRequest, IngestResponse, TokenStatus } from './types';
-import { Lock, ShieldCheck, Key, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Lock, ShieldCheck, Key, RefreshCw } from 'lucide-react';
+
+interface WorkflowSession {
+  id: string;
+  url: string;
+  result: IngestResponse | null;
+  error: string | null;
+  isLoading: boolean;
+  startTime: number | null;
+  durationMs: number | null;
+  abortController: AbortController | null;
+}
+
+const MAX_WORKFLOWS = 10;
+
+function createEmptySession(id: string, initialUrl = ''): WorkflowSession {
+  return {
+    id,
+    url: initialUrl,
+    result: null,
+    error: null,
+    isLoading: false,
+    startTime: null,
+    durationMs: null,
+    abortController: null,
+  };
+}
+
+function deriveTabTitle(url: string, result: IngestResponse | null): string {
+  if (result?.subpath) {
+    const parts = result.subpath.split('/');
+    return parts[parts.length - 1] || result.subpath;
+  }
+  if (result?.repo_name) {
+    const parts = result.repo_name.split('/');
+    return parts[parts.length - 1] || result.repo_name;
+  }
+  if (!url) return 'New Ingest';
+  try {
+    const clean = url.replace(/^https?:\/\//i, '').replace(/^(?:www\.)?github\.com\//i, '').replace(/\.git$/i, '');
+    const parts = clean.split('/').filter(Boolean);
+    if (parts.length >= 4 && (parts[2] === 'tree' || parts[2] === 'blob')) {
+      return parts[parts.length - 1];
+    }
+    return parts[1] || parts[0] || 'New Ingest';
+  } catch {
+    return 'New Ingest';
+  }
+}
 
 export default function App() {
-  const [result, setResult] = useState<IngestResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [ingestionStartTime, setIngestionStartTime] = useState<number | null>(null);
-  const [ingestionDuration, setIngestionDuration] = useState<number | null>(null);
+  const [sessions, setSessions] = useState<WorkflowSession[]>([createEmptySession('session_1')]);
+  const [activeSessionId, setActiveSessionId] = useState<string>('session_1');
+
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus>({
     configured: false,
     source: 'none',
   });
 
+  const [userRepos, setUserRepos] = useState<RepoSummary[]>([]);
+  const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+
   const [isLocked, setIsLocked] = useState(false);
   const [authInput, setAuthInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isVerifyingAuth, setIsVerifyingAuth] = useState(false);
 
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
 
   const refreshTokens = async () => {
     const status = await checkServerTokenStatus();
     setTokenStatus(status);
 
-    // If server env has authenticated owner
     if (status.configured && status.user && isVerifiedOwner(status.user)) {
       setIsLocked(false);
+      loadRepos(status.user.login);
       return;
     }
 
-    // If client has a saved token/key, verify it directly against server auth
     const savedPat = getSavedToken();
     if (savedPat) {
       try {
@@ -59,15 +109,21 @@ export default function App() {
             source: 'saved_pat',
             user: authRes.user,
           });
+          loadRepos(authRes.user.login);
           return;
         }
-      } catch {
-        // Fall through to locked state
-      }
+      } catch {}
     }
 
-    // Without a verified credential recognized by the server, remain locked
     setIsLocked(true);
+  };
+
+  const loadRepos = async (username = 'honeypie3301') => {
+    setIsLoadingRepos(true);
+    const token = getSavedToken();
+    const repos = await fetchUserRepos(token || undefined, username);
+    setUserRepos(repos);
+    setIsLoadingRepos(false);
   };
 
   useEffect(() => {
@@ -83,14 +139,12 @@ export default function App() {
     setIsVerifyingAuth(true);
 
     try {
-      // Authenticate directly with the server backend
       const authRes = await verifyAuthWithServer(input);
       if (!authRes.success) {
         setAuthError(authRes.error || 'Authentication rejected by server.');
         return;
       }
 
-      // Validated as owner on the server
       setSavedToken(input);
       setIsLocked(false);
       setAuthError(null);
@@ -100,8 +154,9 @@ export default function App() {
         source: 'saved_pat',
         user: authRes.user || null,
       });
+      loadRepos(authRes.user?.login || 'honeypie3301');
     } catch {
-      setAuthError('Network error while connecting to authentication server. Please try again.');
+      setAuthError('Network error while connecting to authentication server.');
     } finally {
       setIsVerifyingAuth(false);
     }
@@ -113,60 +168,138 @@ export default function App() {
     setIsLocked(true);
   };
 
-  const handleCancel = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+  const updateActiveSession = (patch: Partial<WorkflowSession>) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === activeSessionId ? { ...s, ...patch } : s))
+    );
+  };
+
+  const handleCancelSession = (sessionId = activeSessionId) => {
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (s.id === sessionId && s.abortController) {
+          s.abortController.abort();
+          return { ...s, isLoading: false, error: 'Ingestion was cancelled.', abortController: null, startTime: null };
+        }
+        return s;
+      })
+    );
+  };
+
+  const handleAddTab = (initialUrl = '') => {
+    if (sessions.length >= MAX_WORKFLOWS) return;
+    const newId = `session_${Date.now()}`;
+    const newSession = createEmptySession(newId, initialUrl);
+    setSessions((prev) => [...prev, newSession]);
+    setActiveSessionId(newId);
+  };
+
+  const handleCloseTab = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sessions.length <= 1) return;
+    handleCancelSession(id);
+    const newSessions = sessions.filter((s) => s.id !== id);
+    setSessions(newSessions);
+    if (activeSessionId === id) {
+      setActiveSessionId(newSessions[newSessions.length - 1].id);
+    }
+  };
+
+  const handleSelectRepo = (repoFullName: string) => {
+    const fullUrl = `https://github.com/${repoFullName}`;
+    // If active session is empty or done, update it, otherwise open new workflow tab if space available
+    if (!activeSession.url || activeSession.result || activeSession.error) {
+      updateActiveSession({ url: fullUrl });
+    } else if (sessions.length < MAX_WORKFLOWS) {
+      handleAddTab(fullUrl);
+    } else {
+      updateActiveSession({ url: fullUrl });
     }
   };
 
   const handleIngest = async (req: IngestRequest) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    const sessionId = activeSessionId;
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
     const startTime = Date.now();
-    setIngestionStartTime(startTime);
-    setIngestionDuration(null);
-    setIsLoading(true);
-    setError(null);
-    setResult(null);
+
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              url: req.input_text,
+              isLoading: true,
+              startTime,
+              durationMs: null,
+              error: null,
+              result: null,
+              abortController,
+            }
+          : s
+      )
+    );
 
     try {
       const data = await performIngest(req, abortController.signal);
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setIngestionDuration(Date.now() - startTime);
-        setResult(data);
-      }
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id === sessionId) {
+            if (data.error) {
+              return { ...s, isLoading: false, error: data.error, abortController: null, startTime: null };
+            }
+            return {
+              ...s,
+              isLoading: false,
+              result: data,
+              durationMs: Date.now() - startTime,
+              abortController: null,
+              startTime: null,
+            };
+          }
+          return s;
+        })
+      );
     } catch (err: any) {
-      if (err.name === 'AbortError' || abortController.signal.aborted || err.message?.includes('cancelled')) {
-        setError('Ingestion was cancelled.');
-      } else {
-        if (err.message?.includes('Unauthorized')) {
-          setSavedToken('');
-          setIsLocked(true);
-        }
-        setError(err.message || 'An unexpected error occurred while ingesting the repository.');
-      }
-    } finally {
-      setIsLoading(false);
-      setIngestionStartTime(null);
-      abortControllerRef.current = null;
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id === sessionId) {
+            const isCancelled = err.name === 'AbortError' || abortController.signal.aborted || err.message?.includes('cancelled');
+            return {
+              ...s,
+              isLoading: false,
+              error: isCancelled ? 'Ingestion was cancelled.' : err.message || 'An error occurred during ingestion.',
+              abortController: null,
+              startTime: null,
+            };
+          }
+          return s;
+        })
+      );
     }
   };
 
   const handleReset = () => {
-    handleCancel();
-    setResult(null);
-    setError(null);
-    setIsLoading(false);
-    setIngestionStartTime(null);
-    setIngestionDuration(null);
+    handleCancelSession();
+    updateActiveSession({
+      result: null,
+      error: null,
+      isLoading: false,
+      startTime: null,
+      durationMs: null,
+      abortController: null,
+    });
   };
+
+  const tabsData: WorkflowTab[] = sessions.map((s) => ({
+    id: s.id,
+    url: s.url,
+    title: deriveTabTitle(s.url, s.result),
+    isLoading: s.isLoading,
+    hasResult: Boolean(s.result),
+    hasError: Boolean(s.error),
+    startTime: s.startTime,
+    filesCount: s.result?.files_analyzed,
+  }));
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#e6edf3] flex flex-col justify-between selection:bg-amber-500/30 selection:text-amber-200 w-full overflow-x-hidden">
@@ -179,7 +312,6 @@ export default function App() {
           onReset={handleReset}
         />
 
-        {/* If Owner Lock is active and visitor hasn't authenticated */}
         {isLocked ? (
           <div className="w-full max-w-md mx-auto px-4 pt-16 sm:pt-24 pb-16">
             <div className="relative">
@@ -233,21 +365,15 @@ export default function App() {
                       </>
                     )}
                   </button>
-
-                  <div className="pt-2 text-[11px] text-gray-400 leading-normal text-left bg-[#0d1117] p-2.5 rounded-lg border border-[#30363d]">
-                    <span className="font-bold text-gray-200">Security note:</span> Authenticating validates your credentials against server middleware. Unauthorized API calls are rejected with HTTP 401.
-                  </div>
                 </form>
               </div>
             </div>
           </div>
         ) : (
-          /* Main App View */
           <main className="w-full pt-6 sm:pt-10 pb-16">
             {/* Hero Section */}
-            <div className="mb-6 sm:mb-10 text-center relative px-4">
+            <div className="mb-6 sm:mb-8 text-center relative px-4">
               <div className="relative inline-block mx-auto">
-                {/* Inline Sparkles never fail to load */}
                 <SparkleRed className="sparkle-red hidden sm:block select-none" />
                 <SparkleGreen className="sparkle-green hidden sm:block select-none" />
 
@@ -263,24 +389,45 @@ export default function App() {
               </p>
             </div>
 
+            {/* Separate Dedicated Repositories Toolbar */}
+            <ReposToolbar
+              repos={userRepos}
+              isLoading={isLoadingRepos}
+              onSelectRepo={handleSelectRepo}
+            />
+
+            {/* Workspace Multi-Ingest Tabs Bar */}
+            <WorkflowTabsBar
+              tabs={tabsData}
+              activeId={activeSessionId}
+              onSelectTab={(id) => setActiveSessionId(id)}
+              onCloseTab={handleCloseTab}
+              onAddTab={() => handleAddTab()}
+              maxTabs={MAX_WORKFLOWS}
+            />
+
             {/* Form */}
             <GitForm
+              key={activeSession.id}
+              initialUrl={activeSession.url}
+              onUrlChange={(newUrl) => updateActiveSession({ url: newUrl })}
               onIngest={handleIngest}
-              isLoading={isLoading}
-              startTime={ingestionStartTime}
+              isLoading={activeSession.isLoading}
+              startTime={activeSession.startTime}
               tokenStatus={tokenStatus}
               onOpenTokenModal={() => setIsTokenModalOpen(true)}
-              onCancel={handleCancel}
+              onCancel={() => handleCancelSession(activeSession.id)}
             />
 
             {/* Result Area */}
             <ResultSection
-              result={result}
-              error={error}
-              isLoading={isLoading}
-              startTime={ingestionStartTime}
-              durationMs={ingestionDuration}
-              onCancel={handleCancel}
+              key={`result_${activeSession.id}`}
+              result={activeSession.result}
+              error={activeSession.error}
+              isLoading={activeSession.isLoading}
+              startTime={activeSession.startTime}
+              durationMs={activeSession.durationMs}
+              onCancel={() => handleCancelSession(activeSession.id)}
             />
           </main>
         )}
@@ -294,7 +441,7 @@ export default function App() {
               G
             </div>
             <span className="text-sm font-extrabold text-white">GitIngest Personal</span>
-            <span className="text-xs text-gray-400">| Vercel & GitHub Actions Ready</span>
+            <span className="text-xs text-gray-400">| Multi-Ingest Workspace (Max {MAX_WORKFLOWS})</span>
           </div>
 
           <div className="flex items-center gap-4 text-xs font-bold text-gray-400">

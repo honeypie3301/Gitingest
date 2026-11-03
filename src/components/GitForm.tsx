@@ -12,6 +12,8 @@ interface GitFormProps {
   tokenStatus: TokenStatus;
   onOpenTokenModal: () => void;
   onCancel?: () => void;
+  initialUrl?: string;
+  onUrlChange?: (url: string) => void;
 }
 
 export const GitForm: React.FC<GitFormProps> = ({
@@ -21,8 +23,14 @@ export const GitForm: React.FC<GitFormProps> = ({
   tokenStatus,
   onOpenTokenModal,
   onCancel,
+  initialUrl = '',
+  onUrlChange,
 }) => {
-  const [url, setUrl] = useState('');
+  const [url, setUrl] = useState(initialUrl);
+
+  useEffect(() => {
+    setUrl(initialUrl);
+  }, [initialUrl]);
   const [patternType, setPatternType] = useState<PatternType>('exclude');
   const [pattern, setPattern] = useState('');
   const [maxFileSize, setMaxFileSize] = useState(50); // In MB
@@ -125,7 +133,10 @@ export const GitForm: React.FC<GitFormProps> = ({
                   <input
                     type="text"
                     value={url}
-                    onChange={(e) => setUrl(e.target.value)}
+                    onChange={(e) => {
+                      setUrl(e.target.value);
+                      onUrlChange?.(e.target.value);
+                    }}
                     placeholder="https://github.com/owner/repository"
                     required
                     className="w-full px-3.5 sm:px-5 py-2.5 sm:py-3.5 bg-transparent placeholder-gray-500 text-white font-medium text-xs sm:text-base focus:outline-none"
@@ -172,21 +183,21 @@ export const GitForm: React.FC<GitFormProps> = ({
             </div>
 
             {/* Dynamic Personal Repositories Section */}
-            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-0.5">
-              <span className="text-[11px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider mr-1 flex items-center gap-1">
-                <FolderGit2 className="w-3.5 h-3.5 text-amber-400" />
-                <span>Your Repos:</span>
-              </span>
-
-              {isLoadingRepos && (
-                <span className="text-[11px] text-gray-500 flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3 animate-spin text-amber-500" />
-                  <span>Loading repos...</span>
+            {userRepos.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-0.5">
+                <span className="text-[11px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider mr-1 flex items-center gap-1">
+                  <FolderGit2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Your Repos:</span>
                 </span>
-              )}
 
-              {!isLoadingRepos && userRepos.length > 0 ? (
-                userRepos.slice(0, 8).map((repo) => (
+                {isLoadingRepos && (
+                  <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin text-amber-500" />
+                    <span>Loading repos...</span>
+                  </span>
+                )}
+
+                {!isLoadingRepos && userRepos.slice(0, 8).map((repo) => (
                   <button
                     key={repo.full_name}
                     type="button"
@@ -197,29 +208,9 @@ export const GitForm: React.FC<GitFormProps> = ({
                     {repo.is_private && <Lock className="w-3 h-3 text-amber-400 shrink-0" />}
                     <span className="truncate max-w-[140px] sm:max-w-none">{repo.name}</span>
                   </button>
-                ))
-              ) : (
-                !isLoadingRepos && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => handleRepoClick('honeypie3301/Backwoods-Test')}
-                      className="text-[11px] sm:text-xs font-semibold px-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-200 rounded border border-[#30363d] transition-colors shadow-[1px_1px_0_0_#000000] cursor-pointer flex items-center gap-1"
-                    >
-                      <Lock className="w-3 h-3 text-amber-400" />
-                      <span>Backwoods-Test</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRepoClick('honeypie3301/gitingest')}
-                      className="text-[11px] sm:text-xs font-semibold px-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-gray-200 rounded border border-[#30363d] transition-colors shadow-[1px_1px_0_0_#000000] cursor-pointer"
-                    >
-                      gitingest
-                    </button>
-                  </>
-                )
-              )}
-            </div>
+                ))}
+              </div>
+            )}
 
             {/* Controls Row: Pattern filter & Max Size Slider (up to 500 MB) */}
             <div className="pt-3 border-t-2 border-[#30363d] grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 items-center">
