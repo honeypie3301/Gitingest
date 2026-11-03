@@ -457,7 +457,7 @@ export default function App() {
             </button>
             <span>•</span>
             <a
-              href="https://github.com/honeypie3301/gitingest"
+              href="https://github.com/honeypie3301/Personal-Gitingest"
               target="_blank"
               rel="noreferrer"
               className="hover:text-amber-400 transition-colors"

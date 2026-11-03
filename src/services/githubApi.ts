@@ -35,7 +35,7 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
     }
 
     if (!res.ok && (res.status === 403 || res.status === 404)) {
-      const repoRes = await fetch('https://api.github.com/repos/honeypie3301/gitingest', {
+      const repoRes = await fetch('https://api.github.com/repos/honeypie3301/Personal-Gitingest', {
         headers: {
           Authorization: `Bearer ${clean}`,
           Accept: 'application/vnd.github.v3+json',
