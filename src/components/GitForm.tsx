@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle } from 'lucide-react';
+import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle, Check } from 'lucide-react';
 import { IngestRequest, PatternType, TokenStatus } from '../types';
 import { getSavedPatterns, savePatterns, getSavedToken, getSavedDecompileClasses, saveDecompileClasses } from '../services/ingest';
 import { fetchUserRepos, RepoSummary } from '../services/githubApi';
@@ -15,6 +15,8 @@ interface GitFormProps {
   initialUrl?: string;
   onUrlChange?: (url: string) => void;
 }
+
+type SizeUnit = 'KB' | 'MB' | 'GB';
 
 export const GitForm: React.FC<GitFormProps> = React.memo(({
   onIngest,
@@ -34,8 +36,12 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
   const [patternType, setPatternType] = useState<PatternType>('exclude');
   const [pattern, setPattern] = useState('');
   const [maxFileSize, setMaxFileSize] = useState(50); // In MB
+  const [sizeUnit, setSizeUnit] = useState<SizeUnit>('MB');
+  const [displaySize, setDisplaySize] = useState('50');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isUnitDropdownOpen, setIsUnitDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const unitDropdownRef = useRef<HTMLDivElement>(null);
 
   const [userRepos, setUserRepos] = useState<RepoSummary[]>([]);
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
@@ -45,7 +51,10 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
     const saved = getSavedPatterns();
     setPatternType(saved.type);
     setPattern(saved.pattern);
-    setMaxFileSize(saved.maxFileSize || 50);
+    const savedMb = saved.maxFileSize || 50;
+    setMaxFileSize(savedMb);
+    setDisplaySize(String(savedMb));
+    setSizeUnit('MB');
     setDecompileClasses(getSavedDecompileClasses());
 
     loadDynamicRepos();
@@ -55,6 +64,9 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsDropdownOpen(false);
+      }
+      if (unitDropdownRef.current && !unitDropdownRef.current.contains(event.target as Node)) {
+        setIsUnitDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -90,10 +102,50 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
     savePatterns(patternType, newPattern, maxFileSize);
   };
 
+  const convertToMb = (val: number, unit: SizeUnit): number => {
+    if (unit === 'KB') return +(val / 1024).toFixed(4);
+    if (unit === 'GB') return +(val * 1024).toFixed(2);
+    return +val.toFixed(2);
+  };
+
+  const convertFromMb = (mb: number, unit: SizeUnit): number => {
+    if (unit === 'KB') return Math.round(mb * 1024);
+    if (unit === 'GB') return +(mb / 1024).toFixed(2);
+    return +mb.toFixed(2);
+  };
+
+  const handleUnitChange = (newUnit: SizeUnit) => {
+    setSizeUnit(newUnit);
+    setIsUnitDropdownOpen(false);
+    const converted = convertFromMb(maxFileSize, newUnit);
+    setDisplaySize(String(converted));
+  };
+
+  const handleSizeInputChange = (rawVal: string) => {
+    setDisplaySize(rawVal);
+    const num = parseFloat(rawVal);
+    if (!isNaN(num) && num > 0) {
+      const mb = convertToMb(num, sizeUnit);
+      handleFileSizeChange(mb);
+    }
+  };
+
+  const handleSliderChange = (sliderVal: number) => {
+    setDisplaySize(String(sliderVal));
+    const mb = convertToMb(sliderVal, sizeUnit);
+    handleFileSizeChange(mb);
+  };
+
   const handleFileSizeChange = (newSize: number) => {
     setMaxFileSize(newSize);
     savePatterns(patternType, pattern, newSize);
   };
+
+  const currentValNum = parseFloat(displaySize) || 1;
+  const sliderMin = sizeUnit === 'GB' ? 0.1 : sizeUnit === 'KB' ? 10 : 1;
+  const defaultMax = sizeUnit === 'GB' ? 10 : sizeUnit === 'KB' ? 10240 : 500;
+  const sliderMax = Math.max(defaultMax, Math.ceil(currentValNum * 1.2));
+  const sliderStep = sizeUnit === 'GB' ? 0.1 : sizeUnit === 'KB' ? 10 : 1;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -275,23 +327,60 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
                 </div>
               </div>
 
-              {/* Max File Size Slider (1 MB to 500 MB) */}
-              <div className="md:col-span-5 flex items-center justify-between gap-2.5 bg-[#0d1117] p-2 sm:p-2.5 rounded border-[3px] border-[#30363d] shadow-[2px_2px_0_0_#000000]">
-                <span className="text-[10px] sm:text-xs font-extrabold text-gray-300 uppercase tracking-wider whitespace-nowrap">
+              {/* Max File Size Slider + Input + Unit Selector */}
+              <div className="md:col-span-5 flex items-center justify-between gap-2 bg-[#0d1117] p-2 sm:p-2.5 rounded border-[3px] border-[#30363d] shadow-[2px_2px_0_0_#000000]">
+                <span className="text-[10px] sm:text-xs font-extrabold text-gray-300 uppercase tracking-wider whitespace-nowrap shrink-0">
                   Max Size:
                 </span>
                 <input
                   type="range"
-                  min="1"
-                  max="500"
-                  step="5"
-                  value={maxFileSize}
-                  onChange={(e) => handleFileSizeChange(Number(e.target.value))}
-                  className="w-full accent-amber-500 cursor-pointer"
+                  min={sliderMin}
+                  max={sliderMax}
+                  step={sliderStep}
+                  value={Math.min(sliderMax, Math.max(sliderMin, currentValNum))}
+                  onChange={(e) => handleSliderChange(Number(e.target.value))}
+                  className="w-full min-w-[50px] accent-amber-500 cursor-pointer"
                 />
-                <span className="text-[10px] sm:text-xs font-mono font-bold bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded border border-amber-500/50 whitespace-nowrap">
-                  {maxFileSize} MB
-                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    value={displaySize}
+                    onChange={(e) => handleSizeInputChange(e.target.value)}
+                    className="w-14 sm:w-16 px-1.5 py-0.5 bg-[#161b22] border border-[#30363d] focus:border-amber-400 rounded text-center font-mono font-bold text-xs sm:text-sm text-amber-300 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                    title="Enter custom file size"
+                  />
+                  <div className="relative" ref={unitDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setIsUnitDropdownOpen((prev) => !prev)}
+                      className="bg-[#1e242c] hover:bg-[#252d37] font-extrabold text-[10px] sm:text-xs uppercase px-1.5 py-1 border border-amber-500/50 rounded text-amber-300 flex items-center gap-0.5 focus:outline-none cursor-pointer transition-colors shadow-[1px_1px_0_0_#000000]"
+                      title="Switch unit: KB, MB, GB"
+                    >
+                      <span>{sizeUnit}</span>
+                      <ChevronDown className={`w-3 h-3 transition-transform ${isUnitDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isUnitDropdownOpen && (
+                      <div className="absolute right-0 top-full mt-1.5 w-16 bg-[#161b22] border-2 border-amber-500/80 rounded-lg shadow-[3px_3px_0_0_#000000] py-1 z-50 overflow-hidden">
+                        {(['KB', 'MB', 'GB'] as const).map((unit) => (
+                          <button
+                            key={unit}
+                            type="button"
+                            onClick={() => handleUnitChange(unit)}
+                            className={`w-full text-left px-2 py-1 text-xs font-bold uppercase transition-colors ${
+                              sizeUnit === unit
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : 'text-gray-300 hover:bg-[#21262d] hover:text-white'
+                            }`}
+                          >
+                            {unit}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -323,16 +412,30 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
 
               <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-between sm:justify-end">
                 <label
-                  className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] sm:text-xs text-gray-300 hover:text-white px-2.5 py-1 rounded-lg border-2 border-[#30363d] bg-[#161b22] hover:border-amber-500/50 transition-colors shadow-[1px_1px_0_0_#000000]"
+                  className={`flex items-center gap-2 cursor-pointer select-none text-[11px] sm:text-xs px-2.5 py-1.5 rounded-lg border-2 transition-all shadow-[1px_1px_0_0_#000000] ${
+                    decompileClasses
+                      ? 'border-amber-500/80 bg-amber-500/10 text-amber-300'
+                      : 'border-[#30363d] bg-[#161b22] text-gray-300 hover:border-gray-500 hover:text-white'
+                  }`}
                   title="Decompile Java .class bytecode files into readable source code"
                 >
                   <input
                     type="checkbox"
                     checked={decompileClasses}
                     onChange={(e) => handleDecompileChange(e.target.checked)}
-                    className="w-3.5 h-3.5 accent-amber-500 rounded cursor-pointer"
+                    className="sr-only"
                   />
-                  <span className="font-bold text-gray-200">Decompile .class</span>
+                  <div
+                    className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors shadow-[1px_1px_0_0_#000000] ${
+                      decompileClasses
+                        ? 'bg-amber-500 border-amber-400 text-gray-950 font-black'
+                        : 'bg-[#0d1117] border-[#30363d]'
+                    }`}
+                    aria-hidden="true"
+                  >
+                    {decompileClasses && <Check className="w-3 h-3 stroke-[3.5]" />}
+                  </div>
+                  <span className="font-bold tracking-tight">Decompile .class</span>
                 </label>
 
                 <button
