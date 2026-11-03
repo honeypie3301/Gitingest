@@ -64,6 +64,13 @@ export default async function handler(req: any, res: any) {
       const rateLimit = await githubRateLimitMessage(repoRes);
       if (rateLimit) return res.status(429).json({ error: rateLimit });
       if (!repoRes.ok) {
+        const errJson = await repoRes.json().catch(() => null);
+        const msg = errJson?.message || repoRes.statusText || 'Unknown GitHub API error';
+        if (repoRes.status === 401) {
+          return res.status(401).json({
+            error: `GitHub API authentication failed (401): ${msg}. Please check that your token is active and has access.`,
+          });
+        }
         if (repoRes.status === 404) {
           return res.status(404).json({
             error: `Repository "${owner}/${repo}" not found or is private. Make sure your PAT has 'repo' scope.`,
@@ -71,10 +78,10 @@ export default async function handler(req: any, res: any) {
         }
         if (repoRes.status === 403) {
           return res.status(403).json({
-            error: 'GitHub API rate limit exceeded or access forbidden. Check your Personal Access Token.',
+            error: `GitHub API access forbidden: ${msg}. Check your Personal Access Token permissions.`,
           });
         }
-        return res.status(repoRes.status).json({ error: `GitHub API error: ${repoRes.statusText}` });
+        return res.status(repoRes.status).json({ error: `GitHub API error (${repoRes.status}): ${msg}` });
       }
       const repoData = await repoRes.json();
       branch = repoData.default_branch || 'main';

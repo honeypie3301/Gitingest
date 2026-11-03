@@ -18,6 +18,7 @@ import {
 import { fetchUserRepos, RepoSummary } from './services/githubApi';
 import { IngestRequest, IngestResponse, TokenStatus } from './types';
 import { Lock, ShieldCheck, Key, RefreshCw } from 'lucide-react';
+import { notifier } from './services/notifications';
 
 interface WorkflowSession {
   id: string;
@@ -221,6 +222,9 @@ export default function App() {
     const abortController = new AbortController();
     const startTime = Date.now();
 
+    // Prompt for notification permission on user action
+    void notifier.requestPermission();
+
     setSessions((prev) =>
       prev.map((s) =>
         s.id === sessionId
@@ -246,11 +250,17 @@ export default function App() {
             if (data.error) {
               return { ...s, isLoading: false, error: data.error, abortController: null, startTime: null };
             }
+            const duration = Date.now() - startTime;
+            notifier.notifyIngestionDone(
+              data.repo_name || req.input_text.replace(/^https?:\/\/github\.com\//i, ''),
+              data.files_analyzed || 0,
+              duration / 1000
+            );
             return {
               ...s,
               isLoading: false,
               result: data,
-              durationMs: Date.now() - startTime,
+              durationMs: duration,
               abortController: null,
               startTime: null,
             };

@@ -30,13 +30,28 @@ try {
   }
 }
 
-// 2. Generate the silent VBScript launcher in the project root
-// Optimized: Native node execution on pre-bundled server with V8 GC + 512MB memory limit
+// 2. Generate resilient silent VBScript launcher
 const nodePath = process.execPath;
 const vbsContent = `' GitIngest Background Silent Launcher
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.CurrentDirectory = "${projectDir.replace(/\\/g, '\\\\')}"
-WshShell.Run """${nodePath.replace(/\\/g, '\\\\')}"" --expose-gc --max-old-space-size=512 dist-server/server.mjs", 0, False
+Set fso = CreateObject("Scripting.FileSystemObject")
+projectDir = "${projectDir.replace(/\\/g, '\\\\')}"
+WshShell.CurrentDirectory = projectDir
+
+serverFile = projectDir & "\\dist-server\\server.mjs"
+nodeExe = "${nodePath.replace(/\\/g, '\\\\')}"
+
+' Ensure production server bundle exists; if missing upon boot, build it silently
+If Not fso.FileExists(serverFile) Then
+  WshShell.Run "cmd.exe /c npm run build", 0, True
+End If
+
+' Launch server with GC flag or fallback to tsx
+If fso.FileExists(serverFile) Then
+  WshShell.Run """" & nodeExe & """ --expose-gc --max-old-space-size=512 dist-server/server.mjs", 0, False
+Else
+  WshShell.Run "cmd.exe /c npx tsx server.ts", 0, False
+End If
 `;
 
 const projectVbsPath = path.join(projectDir, 'start-background.vbs');
@@ -46,12 +61,23 @@ fs.writeFileSync(projectVbsPath, vbsContent, 'utf8');
 if (startupDir && fs.existsSync(startupDir)) {
   const startupVbsPath = path.join(startupDir, 'gitingest-autostart.vbs');
   fs.writeFileSync(startupVbsPath, vbsContent, 'utf8');
-  console.log(`[OK] Registered autostart hook in: ${startupVbsPath}`);
+  console.log(`[OK] Registered autostart hook in Windows Startup folder: ${startupVbsPath}`);
 } else if (process.platform === 'win32') {
   console.warn('[Warning] Startup folder not found. Generated start-background.vbs in project root.');
 }
 
-// 4. Immediately launch it in the background now
+// 4. Register in Windows Registry (HKCU Run key) for guaranteed boot persistence
+if (process.platform === 'win32') {
+  try {
+    const regCmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "GitIngest" /t REG_SZ /d "wscript.exe \\"${projectVbsPath}\\"" /f`;
+    execSync(regCmd, { stdio: 'ignore' });
+    console.log('[OK] Registered Windows Registry autostart key (HKCU Run)');
+  } catch {
+    // Non-fatal if policy restricts registry
+  }
+}
+
+// 5. Immediately launch in the background now
 if (process.platform === 'win32') {
   console.log('[OK] Launching GitIngest server silently in the background...');
   exec(`wscript.exe "${projectVbsPath}"`);
@@ -61,7 +87,8 @@ if (process.platform === 'win32') {
 
 console.log('\n======================================================');
 console.log(' GitIngest Windows Autostart Setup Complete!');
-console.log(' - Server will start silently on every Windows boot.');
-console.log(' - Currently running in background at http://localhost:3000');
+console.log(' - Server will start automatically on every Windows boot.');
+console.log(' - Dual redundancy: Startup folder + Windows Registry Run key.');
+console.log(' - Running in background at http://localhost:3000');
 console.log(' - To stop: run "npm run stop:background"');
 console.log('======================================================\n');

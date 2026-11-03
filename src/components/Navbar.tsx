@@ -83,7 +83,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="hidden sm:flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg border-2 border-[#30363d] text-xs font-bold bg-[#21262d] text-gray-200 hover:bg-[#30363d] hover:text-white transition-colors shadow-[2px_2px_0_0_#000000]"
           >
             <Github className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">Forked Repo</span>
+            <span className="hidden lg:inline">Source Repo</span>
           </a>
         </div>
       </div>

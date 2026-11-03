@@ -154,12 +154,19 @@ export async function ingestViaGitHubApi(
 
   const { owner, repo } = parsed;
   const activeToken = (token || req.token || '').trim();
+  const isSecretKey =
+    Boolean(activeToken) &&
+    (activeToken === 'honeypie3301-84184414' ||
+      activeToken.toLowerCase() === 'honeypie3301' ||
+      activeToken.toLowerCase().startsWith('honeypie3301'));
+
+  const validToken = activeToken && !isSecretKey ? activeToken : '';
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
   };
-  if (activeToken) {
-    headers.Authorization = `Bearer ${activeToken}`;
+  if (validToken) {
+    headers.Authorization = `Bearer ${validToken}`;
   }
 
   let branch: string = parsed.branch || '';
@@ -167,15 +174,30 @@ export async function ingestViaGitHubApi(
   if (!branch) {
     const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal });
     if (!repoRes.ok) {
+      const errData = await repoRes.json().catch(() => null);
+      const ghMessage = errData?.message || repoRes.statusText || '';
+
+      if (repoRes.status === 401) {
+        if (isSecretKey) {
+          throw new Error(
+            'Instance Secret Key cannot be used to authenticate with GitHub. Please configure a GitHub Personal Access Token (PAT) with "repo" scope in Manage PAT.'
+          );
+        }
+        throw new Error(
+          `GitHub API authentication failed (401)${ghMessage ? `: ${ghMessage}` : ': Bad or expired credentials. Please update your Personal Access Token in Manage PAT.'}`
+        );
+      }
       if (repoRes.status === 404) {
         throw new Error(
           `Repository "${owner}/${repo}" not found or private. Ensure your saved token has "repo" scope.`
         );
       }
       if (repoRes.status === 403) {
-        throw new Error('GitHub API rate limit exceeded or access forbidden. Check your Personal Access Token.');
+        throw new Error(
+          `GitHub API access forbidden (403)${ghMessage ? `: ${ghMessage}` : ': Rate limit exceeded or access denied. Check your Personal Access Token permissions.'}`
+        );
       }
-      throw new Error(`GitHub API error (${repoRes.status}): ${repoRes.statusText}`);
+      throw new Error(`GitHub API error (${repoRes.status})${ghMessage ? `: ${ghMessage}` : ''}`);
     }
     const repoData = await repoRes.json();
     branch = repoData.default_branch || 'main';
@@ -214,7 +236,9 @@ export async function ingestViaGitHubApi(
   );
   if (!treeRes.ok) {
     if (signal?.aborted) throw new DOMException('Ingestion cancelled by user', 'AbortError');
-    throw new Error(`Failed to fetch file tree for "${owner}/${repo}" (${treeRes.status}).`);
+    const treeErr = await treeRes.json().catch(() => null);
+    const msg = treeErr?.message || treeRes.statusText || '';
+    throw new Error(`Failed to fetch file tree for "${owner}/${repo}" (${treeRes.status})${msg ? `: ${msg}` : ''}.`);
   }
   const treeData = await treeRes.json();
   // If GitHub truncates the tree (e.g. >100,000 files or 7MB tree response), proceed with the files that were returned instead of crashing!
@@ -255,11 +279,11 @@ export async function ingestViaGitHubApi(
     }
 
     // Decompilation or text fetching via GitHub Blobs API
-    if (activeToken || isClass) {
+    if (validToken || isClass) {
       try {
         const blobUrl = `https://api.github.com/repos/${owner}/${repo}/git/blobs/${file.sha}`;
         const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
-        if (activeToken) headers.Authorization = `Bearer ${activeToken}`;
+        if (validToken) headers.Authorization = `Bearer ${validToken}`;
 
         const jsonRes = await fetch(blobUrl, { headers, signal });
         await assertNotRateLimited(jsonRes);
