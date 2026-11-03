@@ -8,13 +8,19 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
     "build:static": "vite build",
     "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
-    "start": "node server.ts",
+    "start": "node --expose-gc --max-old-space-size=512 dist-server/server.mjs || node server.ts",
+    "restart": "restart.bat",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js dist-server",
     "lint": "tsc --noEmit",
     "worker": "tsx worker/server.ts",
     "test:ingest": "tsx --test tests/performance/*.test.ts",
-    "benchmark:ingest": "tsx tests/performance/benchmark.ts"
+    "benchmark:ingest": "tsx tests/performance/benchmark.ts",
+    "setup:autostart": "node scripts/setup-autostart.js",
+    "stop:background": "node scripts/stop-background.js",
+    "auto": "node scripts/setup-autostart.js",
+    "stop": "node scripts/stop-background.js",
+    "stats": "stats.bat"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",
