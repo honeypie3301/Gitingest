@@ -7,6 +7,7 @@ import os from 'os';
 import dotenv from 'dotenv';
 import JSZip from 'jszip';
 import { handleWorkerJob, submitWorkerJob } from './lib/worker-proxy.ts';
+import { decompileJavaClass } from './src/services/decompiler/javaClassDecompiler.ts';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
@@ -257,7 +258,7 @@ app.post('/api/ingest', async (req, res) => {
     });
   }
 
-  const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token } = req.body;
+  const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token, decompile_classes = false } = req.body;
 
   if (!input_text || typeof input_text !== 'string') {
     return res.status(400).json({ error: 'Please provide a valid repository URL or path' });
@@ -308,7 +309,6 @@ app.post('/api/ingest', async (req, res) => {
             if (entry.isDirectory()) {
               walkLocalDir(full);
             } else if (entry.isFile()) {
-              if (isBinaryExtension(rel)) continue;
               if (!isPathAllowed(rel)) continue;
               try {
                 const stat = fs.statSync(full);
@@ -331,11 +331,23 @@ app.post('/api/ingest', async (req, res) => {
         for (const file of collectedFiles) {
           try {
             const buf = fs.readFileSync(file.fullPath);
-            if (isBinaryBuffer(buf)) continue;
-            const content = buf.toString('utf-8');
+            let content: string;
+            let fileHeader = file.relPath;
+            if (file.relPath.toLowerCase().endsWith('.class')) {
+              if (decompile_classes) {
+                content = decompileJavaClass(buf, path.basename(file.relPath, '.class'));
+                fileHeader += ' [Decompiled Java]';
+              } else {
+                content = '[Binary file: Java Class file]';
+              }
+            } else if (isBinaryBuffer(buf)) {
+              content = '[Binary file]';
+            } else {
+              content = buf.toString('utf-8');
+            }
             totalChars += content.length;
             fileContents.push(
-              `================================================\nFile: ${file.relPath}\n================================================\n${content}\n`
+              `================================================\nFile: ${fileHeader}\n================================================\n${content}\n`
             );
           } catch {}
         }
@@ -485,7 +497,6 @@ app.post('/api/ingest', async (req, res) => {
 
           if (!relPath || relPath.startsWith('.git/')) continue;
           if (subpath && !relPath.startsWith(subpath)) continue;
-          if (isBinaryExtension(relPath)) continue;
           if (!isPathAllowed(relPath)) continue;
 
           allPaths.push(relPath);
@@ -509,9 +520,26 @@ app.post('/api/ingest', async (req, res) => {
           const chunkResults = await Promise.all(
             chunk.map(async ({ relPath, obj }) => {
               try {
-                const content = await obj.async('string');
-                if (content.length > maxBytes || content.includes('\0')) return null;
-                return { relPath, content, len: content.length };
+                let content: string;
+                let fileHeader = relPath;
+                if (relPath.toLowerCase().endsWith('.class')) {
+                  const buf = await obj.async('nodebuffer');
+                  if (decompile_classes) {
+                    content = decompileJavaClass(buf, path.basename(relPath, '.class'));
+                    fileHeader += ' [Decompiled Java]';
+                  } else {
+                    content = '[Binary file: Java Class file]';
+                  }
+                } else {
+                  const buf = await obj.async('nodebuffer');
+                  if (buf.length > maxBytes) return null;
+                  if (isBinaryBuffer(buf)) {
+                    content = '[Binary file]';
+                  } else {
+                    content = buf.toString('utf-8');
+                  }
+                }
+                return { relPath: fileHeader, content, len: content.length };
               } catch {
                 return null;
               }
@@ -644,7 +672,6 @@ app.post('/api/ingest', async (req, res) => {
       const { stdout: lsOut } = await execFileAsync('git', ['-C', targetRoot, 'ls-files', '-z'], { timeout: 15000 });
       const rawPaths = lsOut.split('\0').filter(Boolean);
       for (const rel of rawPaths) {
-        if (isBinaryExtension(rel)) continue;
         if (!isPathAllowed(rel)) continue;
         const full = path.join(targetRoot, rel);
         try {
@@ -674,7 +701,6 @@ app.post('/api/ingest', async (req, res) => {
             if (entry.isDirectory()) {
               await walkDirFast(full);
             } else if (entry.isFile()) {
-              if (isBinaryExtension(rel)) return;
               if (!isPathAllowed(rel)) return;
               try {
                 const stat = await fsPromises.stat(full);
@@ -714,16 +740,22 @@ app.post('/api/ingest', async (req, res) => {
         chunk.map(async (file) => {
           try {
             const buf = await fsPromises.readFile(file.fullPath);
-            if (isBinaryBuffer(buf)) {
-              return {
-                relPath: file.relPath,
-                content: '[Binary file]',
-                length: 13,
-              };
+            let content: string;
+            let fileHeader = file.relPath;
+            if (file.relPath.toLowerCase().endsWith('.class')) {
+              if (decompile_classes) {
+                content = decompileJavaClass(buf, path.basename(file.relPath, '.class'));
+                fileHeader += ' [Decompiled Java]';
+              } else {
+                content = '[Binary file: Java Class file]';
+              }
+            } else if (isBinaryBuffer(buf)) {
+              content = '[Binary file]';
+            } else {
+              content = buf.toString('utf-8');
             }
-            const content = buf.toString('utf-8');
             return {
-              relPath: file.relPath,
+              relPath: fileHeader,
               content,
               length: content.length,
             };

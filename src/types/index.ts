@@ -6,6 +6,7 @@ export interface IngestRequest {
   pattern_type?: PatternType;
   pattern?: string;
   token?: string;
+  decompile_classes?: boolean;
 }
 
 export interface IngestResponse {

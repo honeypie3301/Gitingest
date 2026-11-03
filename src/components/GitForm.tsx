@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle } from 'lucide-react';
 import { IngestRequest, PatternType, TokenStatus } from '../types';
-import { getSavedPatterns, savePatterns, getSavedToken } from '../services/ingest';
+import { getSavedPatterns, savePatterns, getSavedToken, getSavedDecompileClasses, saveDecompileClasses } from '../services/ingest';
 import { fetchUserRepos, RepoSummary } from '../services/githubApi';
 import { IngestionTimer } from './IngestionTimer';
 
@@ -31,12 +31,14 @@ export const GitForm: React.FC<GitFormProps> = ({
 
   const [userRepos, setUserRepos] = useState<RepoSummary[]>([]);
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+  const [decompileClasses, setDecompileClasses] = useState(false);
 
   useEffect(() => {
     const saved = getSavedPatterns();
     setPatternType(saved.type);
     setPattern(saved.pattern);
     setMaxFileSize(saved.maxFileSize || 50);
+    setDecompileClasses(getSavedDecompileClasses());
 
     loadDynamicRepos();
   }, [tokenStatus]);
@@ -57,6 +59,11 @@ export const GitForm: React.FC<GitFormProps> = ({
     const repos = await fetchUserRepos(token || undefined, 'honeypie3301');
     setUserRepos(repos);
     setIsLoadingRepos(false);
+  };
+
+  const handleDecompileChange = (enabled: boolean) => {
+    setDecompileClasses(enabled);
+    saveDecompileClasses(enabled);
   };
 
   const handlePatternTypeSelect = (type: PatternType) => {
@@ -84,6 +91,7 @@ export const GitForm: React.FC<GitFormProps> = ({
       pattern_type: patternType,
       pattern: pattern.trim(),
       max_file_size: maxFileSize,
+      decompile_classes: decompileClasses,
     });
   };
 
@@ -96,6 +104,7 @@ export const GitForm: React.FC<GitFormProps> = ({
       pattern_type: patternType,
       pattern: pattern.trim(),
       max_file_size: maxFileSize,
+      decompile_classes: decompileClasses,
     });
   };
 
@@ -316,13 +325,28 @@ export const GitForm: React.FC<GitFormProps> = ({
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={onOpenTokenModal}
-                className="text-[11px] sm:text-xs font-bold px-3 py-1 rounded-lg border-2 border-[#30363d] bg-[#21262d] text-gray-200 hover:bg-[#30363d] hover:text-white transition-colors shrink-0 shadow-[1px_1px_0_0_#000000] cursor-pointer"
-              >
-                {tokenStatus.configured ? 'Manage PAT' : 'Configure PAT'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-between sm:justify-end">
+                <label
+                  className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] sm:text-xs text-gray-300 hover:text-white px-2.5 py-1 rounded-lg border-2 border-[#30363d] bg-[#161b22] hover:border-amber-500/50 transition-colors shadow-[1px_1px_0_0_#000000]"
+                  title="Decompile Java .class bytecode files into readable source code"
+                >
+                  <input
+                    type="checkbox"
+                    checked={decompileClasses}
+                    onChange={(e) => handleDecompileChange(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-amber-500 rounded cursor-pointer"
+                  />
+                  <span className="font-bold text-gray-200">Decompile .class</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={onOpenTokenModal}
+                  className="text-[11px] sm:text-xs font-bold px-3 py-1 rounded-lg border-2 border-[#30363d] bg-[#21262d] text-gray-200 hover:bg-[#30363d] hover:text-white transition-colors shrink-0 shadow-[1px_1px_0_0_#000000] cursor-pointer"
+                >
+                  {tokenStatus.configured ? 'Manage PAT' : 'Configure PAT'}
+                </button>
+              </div>
             </div>
           </form>
         </div>

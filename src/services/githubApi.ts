@@ -1,5 +1,6 @@
 import { buildAsciiTree, formatTokens, isBinaryPath, parseGitHubUrl } from './ingestFormatting';
 import { assertNotRateLimited, GitHubRateLimitError } from './githubRateLimit';
+import { decompileJavaClass } from './decompiler/javaClassDecompiler';
 export { parseGitHubUrl } from './ingestFormatting';
 import { IngestRequest, IngestResponse, GitHubUser } from '../types';
 
@@ -187,7 +188,6 @@ export async function ingestViaGitHubApi(
 
   const fileNodes = rawTree.filter((item) => {
     if (item.type !== 'blob') return false;
-    if (isBinaryPath(item.path)) return false;
     if (!isIncluded(item.path)) return false;
     if (item.size && item.size > maxBytes) return false;
     return true;
@@ -202,49 +202,46 @@ export async function ingestViaGitHubApi(
   const fileContents: string[] = [];
   let totalChars = 0;
 
-  // Multi-tier fetcher: handles both private repos (with PAT via GitHub Blobs API)
-  // and public repos (via raw.githubusercontent.com without preflight)
+  // Multi-tier fetcher: handles decompilation, binary placeholders, and text files
   const fetchSingleFileContent = async (file: { path: string; sha: string; size?: number }): Promise<{ path: string; text: string } | null> => {
     if (signal?.aborted) return null;
 
-    // 1. If PAT is present (required for private repos like Backwoods-Test), query GitHub Git Blobs API
-    if (activeToken) {
+    const lowerPath = file.path.toLowerCase();
+    const isClass = lowerPath.endsWith('.class');
+
+    // Handle non-class binary files immediately with placeholder without wasteful HTTP fetches
+    if (!isClass && isBinaryPath(file.path)) {
+      return { path: file.path, text: '[Binary file]' };
+    }
+
+    // Handle .class files when decompilation is disabled
+    if (isClass && !req.decompile_classes) {
+      return { path: file.path, text: '[Binary file: Java Class file]' };
+    }
+
+    // Decompilation or text fetching via GitHub Blobs API
+    if (activeToken || isClass) {
       try {
         const blobUrl = `https://api.github.com/repos/${owner}/${repo}/git/blobs/${file.sha}`;
-        const res = await fetch(blobUrl, {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-            Accept: 'application/vnd.github.raw',
-          },
-          signal,
-        });
-        await assertNotRateLimited(res);
+        const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
+        if (activeToken) headers.Authorization = `Bearer ${activeToken}`;
 
-        if (res.ok) {
-          const text = await res.text();
-          return { path: file.path, text };
-        }
+        const jsonRes = await fetch(blobUrl, { headers, signal });
+        await assertNotRateLimited(jsonRes);
+        if (jsonRes.ok) {
+          const data = await jsonRes.json();
+          if (data.content && data.encoding === 'base64') {
+            const cleanBase64 = data.content.replace(/\s/g, '');
+            const binary = atob(cleanBase64);
+            const bytes = new Uint8Array(binary.length);
+            for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
 
-        // Fallback to json base64 if raw media type returns 415 or 406
-        if (res.status === 415 || res.status === 406 || res.status === 400) {
-          const jsonRes = await fetch(blobUrl, {
-            headers: {
-              Authorization: `Bearer ${activeToken}`,
-              Accept: 'application/vnd.github.v3+json',
-            },
-            signal,
-          });
-          await assertNotRateLimited(jsonRes);
-          if (jsonRes.ok) {
-            const data = await jsonRes.json();
-            if (data.content && data.encoding === 'base64') {
-              const cleanBase64 = data.content.replace(/\s/g, '');
-              const binary = atob(cleanBase64);
-              const bytes = new Uint8Array(binary.length);
-              for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-              const text = new TextDecoder('utf-8').decode(bytes);
-              return { path: file.path, text };
+            if (isClass) {
+              const decompiled = decompileJavaClass(bytes, file.path.split('/').pop()?.replace(/\.class$/i, '') || 'Class');
+              return { path: file.path + ' [Decompiled Java]', text: decompiled };
             }
+            const text = new TextDecoder('utf-8').decode(bytes);
+            return { path: file.path, text };
           }
         }
       } catch (err) {

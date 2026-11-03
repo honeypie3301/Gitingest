@@ -184,7 +184,7 @@ export async function createWorkerApp() {
       if (!commitResponse.ok) { res.status(commitResponse.status).json({ error: `Branch access failed (${commitResponse.status}).` }); return; }
       const commit = (await commitResponse.json()).sha as string;
       if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new Error('Invalid commit returned by GitHub.');
-      const options = { owner: parsed.owner, repo: parsed.repo, branch: branch!, subpath: parsed.subpath, pattern: input.pattern || '', pattern_type: input.pattern_type || 'exclude' as const, max_file_size: input.max_file_size ?? 50 };
+      const options = { owner: parsed.owner, repo: parsed.repo, branch: branch!, subpath: parsed.subpath, pattern: input.pattern || '', pattern_type: input.pattern_type || 'exclude' as const, max_file_size: input.max_file_size ?? 50, decompile_classes: Boolean(input.decompile_classes) };
       const key = hash(JSON.stringify({ version: 1, commit, ...options }));
       const job: Job = { id: randomUUID(), key, state: 'queued', phase: 'queued', created: Date.now(), files_processed: 0, commit };
       await persist(job);

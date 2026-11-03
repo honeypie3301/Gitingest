@@ -27,7 +27,7 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token } = req.body || {};
+  const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token, decompile_classes = false } = req.body || {};
 
   if (!input_text || typeof input_text !== 'string') {
     return res.status(400).json({ error: 'Please provide a valid repository URL' });
@@ -87,6 +87,7 @@ export default async function handler(req: any, res: any) {
       await downloadArchive(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(branch)}`, activeToken, archive, controller.signal);
       const result = await ingestArchive(archive, path.join(directory, 'content.txt'), path.join(directory, 'digest.txt'), {
         owner, repo, branch, subpath: parsed.subpath, max_file_size, pattern_type, pattern,
+        decompile_classes,
         preview_chars: Number.MAX_SAFE_INTEGER,
         signal: controller.signal,
       });

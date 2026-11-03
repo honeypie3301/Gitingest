@@ -8,7 +8,24 @@ const AUTO_INJECT_KEY = 'gitingest_auto_inject_pat';
 const PATTERN_TYPE_KEY = 'gitingest_pattern_type';
 const PATTERN_VALUE_KEY = 'gitingest_pattern_val';
 const MAX_FILE_SIZE_KEY = 'gitingest_max_file_size';
+const DECOMPILE_CLASSES_KEY = 'gitingest_decompile_classes';
 const OWNER_PIN_KEY = 'gitingest_owner_pin';
+
+export function getSavedDecompileClasses(): boolean {
+  try {
+    return localStorage.getItem(DECOMPILE_CLASSES_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveDecompileClasses(enabled: boolean): void {
+  try {
+    localStorage.setItem(DECOMPILE_CLASSES_KEY, enabled ? 'true' : 'false');
+  } catch (e) {
+    console.error('Failed to save decompile classes preference', e);
+  }
+}
 
 export function getSavedToken(): string {
   try {

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer, Eye, EyeOff } from 'lucide-react';
+import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer } from 'lucide-react';
 import { IngestResponse } from '../types';
 import { IngestionTimer, formatDuration } from './IngestionTimer';
 import { artifactUrl, fullDigestSection } from '../services/digestExport';
@@ -25,12 +25,8 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
   onCancel,
 }) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
-  const [showFullPreview, setShowFullPreview] = useState(false);
-  const [loadedContent, setLoadedContent] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   useEffect(() => {
-    setLoadedContent(null);
-    setShowFullPreview(false);
     setActionError(null);
   }, [result]);
 
@@ -40,10 +36,9 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
 
   const displayedContent = useMemo(() => {
     if (!result?.content) return '';
-    if (showFullPreview) return loadedContent ?? result.content;
     if (!isHugeContent) return result.content;
     return `${result.content.slice(0, MAX_PREVIEW_CHARS)}\n\n--- [PREVIEW TRUNCATED TO PREVENT BROWSER FREEZE: Remaining ${((result.content_chars ?? result.content.length) - MAX_PREVIEW_CHARS).toLocaleString()} characters omitted from preview. Use 'Copy Digest' or 'Download' to get the full file] ---`;
-  }, [result?.content, result?.content_chars, isHugeContent, showFullPreview, loadedContent]);
+  }, [result?.content, result?.content_chars, isHugeContent]);
 
   const handleCopy = async (sectionName: 'all' | 'tree' | 'content') => {
     if (!result) return;
@@ -55,14 +50,6 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
         setCopiedSection((curr) => (curr === sectionName ? null : curr));
       }, 2000);
     } catch (error: any) { setActionError(error.message || 'Unable to copy. Use Download instead.'); }
-  };
-
-  const toggleFullPreview = async () => {
-    if (showFullPreview) { setShowFullPreview(false); return; }
-    try {
-      if (result?.content_preview_truncated && loadedContent === null) setLoadedContent(await fullDigestSection(result, 'content'));
-      setShowFullPreview(true);
-    } catch (error: any) { setActionError(error.message); }
   };
 
   const handleDownload = async () => {
@@ -292,25 +279,6 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
                 )}
               </h3>
               <div className="flex items-center gap-2">
-                {isHugeContent && (
-                  <button
-                    onClick={toggleFullPreview}
-                    className="px-2.5 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-gray-300 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1 cursor-pointer"
-                    title={showFullPreview ? "Show trimmed preview to reduce memory" : "Load entire string in preview"}
-                  >
-                    {showFullPreview ? (
-                      <>
-                        <EyeOff className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Limit Preview</span>
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Show All In Browser</span>
-                      </>
-                    )}
-                  </button>
-                )}
                 <button
                   onClick={() => handleCopy('content')}
                   className="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-amber-400 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1.5 cursor-pointer"

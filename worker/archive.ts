@@ -10,6 +10,7 @@ import type { Entry, ZipFile } from 'yauzl';
 import { openCachedZip, readZipBytes } from './zip-reader.js';
 import { buildAsciiTree, formatTokens, isBinaryPath } from '../src/services/ingestFormatting.js';
 import { assertNotRateLimited } from '../src/services/githubRateLimit.js';
+import { decompileJavaClass } from '../src/services/decompiler/javaClassDecompiler.js';
 
 export interface ArchiveOptions {
   owner: string;
@@ -23,6 +24,7 @@ export interface ArchiveOptions {
   signal?: AbortSignal;
   onProgress?: (files: number) => void;
   preview_chars?: number;
+  decompile_classes?: boolean;
 }
 
 export const PREVIEW_CHARS = 200_000;
@@ -86,7 +88,7 @@ async function forEachEntry(zip: ZipFile, accept: (entry: Entry) => void, signal
   });
 }
 
-function readEntry(zip: ZipFile, entry: Entry, signal?: AbortSignal): Promise<string> {
+function readEntryBuffer(zip: ZipFile, entry: Entry, signal?: AbortSignal): Promise<Buffer> {
   // Most source files are tiny. Avoid constructing several streams and thread-pool jobs per file.
   if (entry.uncompressedSize <= 256 * 1024 && entry.compressedSize <= 256 * 1024 && !entry.isEncrypted() && [0, 8].includes(entry.compressionMethod)) {
     return new Promise<number>((resolve, reject) => {
@@ -99,7 +101,7 @@ function readEntry(zip: ZipFile, entry: Entry, signal?: AbortSignal): Promise<st
       signal?.throwIfAborted();
       const buffer = entry.compressionMethod === 0 ? compressed : inflateRawSync(compressed, { maxOutputLength: entry.uncompressedSize + 1 });
       if (buffer.length !== entry.uncompressedSize || crc32(buffer) !== entry.crc32) throw new Error('Corrupt ZIP entry');
-      return buffer.toString('utf8');
+      return buffer;
     });
   }
   return new Promise((resolve, reject) => {
@@ -109,12 +111,17 @@ function readEntry(zip: ZipFile, entry: Entry, signal?: AbortSignal): Promise<st
       const chunks: Buffer[] = [];
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
       stream.once('error', reject);
-      stream.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      stream.once('end', () => resolve(Buffer.concat(chunks)));
       stream.once('close', () => signal?.removeEventListener('abort', abort));
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) abort();
     });
   });
+}
+
+async function readEntry(zip: ZipFile, entry: Entry, signal?: AbortSignal): Promise<string> {
+  const buf = await readEntryBuffer(zip, entry, signal);
+  return buf.toString('utf8');
 }
 
 /** Native zlib, bounded decoding, ordered streaming output. No checkout or giant digest string. */
@@ -154,7 +161,7 @@ export async function ingestArchive(archive: string, contentFile: string, digest
     await forEachEntry(zip, entry => {
       if (prefix === undefined) prefix = entry.fileName.includes('/') ? entry.fileName.split('/')[0] + '/' : '';
       const name = prefix && entry.fileName.startsWith(prefix) ? entry.fileName.slice(prefix.length) : entry.fileName;
-      if (entry.fileName.endsWith('/') || !name || name.startsWith('.git/') || isBinaryPath(name) || !allowed(name)) return;
+      if (entry.fileName.endsWith('/') || !name || name.startsWith('.git/') || !allowed(name)) return;
       unique.set(name, entry);
     }, options.signal);
     const entries = Array.from(unique, ([name, entry]) => ({ name, entry }));
@@ -175,12 +182,29 @@ export async function ingestArchive(archive: string, contentFile: string, digest
         batch.push(next); bytes += next.entry.uncompressedSize; i++;
       }
       const results = await Promise.all(batch.map(async ({ entry, name }) => {
-        // The legacy size check is UTF-16 character length, not bytes. Do not change Unicode selection.
         if (entry.uncompressedSize > maxChars * 3) return { skip: 'size' as const };
-        const content = await readEntry(zip, entry, options.signal);
-        if (content.length > maxChars) return { skip: 'size' as const };
-        if (content.includes('\0')) return { skip: 'binary' as const };
-        return { name, content };
+        let content: string;
+        let displayName = name;
+        if (name.toLowerCase().endsWith('.class')) {
+          const buf = await readEntryBuffer(zip, entry, options.signal);
+          if (options.decompile_classes) {
+            content = decompileJavaClass(buf, path.basename(name, '.class'));
+            displayName += ' [Decompiled Java]';
+          } else {
+            content = '[Binary file: Java Class file]';
+          }
+        } else if (isBinaryPath(name)) {
+          content = '[Binary file]';
+        } else {
+          const rawContent = await readEntry(zip, entry, options.signal);
+          if (rawContent.length > maxChars) return { skip: 'size' as const };
+          if (rawContent.includes('\0')) {
+            content = '[Binary file]';
+          } else {
+            content = rawContent;
+          }
+        }
+        return { name: displayName, content };
       }));
       for (const result of results) {
         if ('skip' in result) {
@@ -301,7 +325,7 @@ export async function ingestDirectory(dir: string, contentFile: string, digestFi
     const start = options.subpath ? path.join(dir, options.subpath) : dir;
     if (await stat(start).then(info => info.isDirectory(), () => false)) {
       for await (const item of walkFiles(start, dir)) {
-        if (isBinaryPath(item.name) || !allowed(item.name)) continue;
+        if (!allowed(item.name)) continue;
         entries.push(item);
       }
     }
@@ -315,11 +339,30 @@ export async function ingestDirectory(dir: string, contentFile: string, digestFi
       const batch = entries.slice(i, i + concurrency);
       i += batch.length;
       const results = await Promise.all(batch.map(async ({ file, name }) => {
-        if ((await stat(file)).size > maxChars * 3) return { skip: 'size' as const };
-        const content = (await readFile(file)).toString('utf8');
-        if (content.length > maxChars) return { skip: 'size' as const };
-        if (content.includes('\0')) return { skip: 'binary' as const };
-        return { name, content };
+        const fileStat = await stat(file);
+        if (fileStat.size > maxChars * 3) return { skip: 'size' as const };
+        let content: string;
+        let displayName = name;
+        if (name.toLowerCase().endsWith('.class')) {
+          const buf = await readFile(file);
+          if (options.decompile_classes) {
+            content = decompileJavaClass(buf, path.basename(name, '.class'));
+            displayName += ' [Decompiled Java]';
+          } else {
+            content = '[Binary file: Java Class file]';
+          }
+        } else if (isBinaryPath(name)) {
+          content = '[Binary file]';
+        } else {
+          const buf = await readFile(file);
+          if (buf.length > maxChars) return { skip: 'size' as const };
+          if (buf.includes(0)) {
+            content = '[Binary file]';
+          } else {
+            content = buf.toString('utf8');
+          }
+        }
+        return { name: displayName, content };
       }));
       for (const result of results) {
         if ('skip' in result) {
