@@ -5,11 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
+    "build:static": "vite build",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
     "start": "node server.ts",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist server.js dist-server",
+    "lint": "tsc --noEmit",
+    "worker": "tsx worker/server.ts",
+    "test:ingest": "tsx --test tests/performance/*.test.ts",
+    "benchmark:ingest": "tsx tests/performance/benchmark.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",

@@ -18,9 +18,11 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
   if (!clean) return null;
 
   try {
+    // Fine-grained PATs (github_pat_) require Bearer. Classic PATs (ghp_) support Bearer and token.
+    const primaryAuth = `Bearer ${clean}`;
     let res = await fetch('https://api.github.com/user', {
       headers: {
-        Authorization: `token ${clean}`,
+        Authorization: primaryAuth,
         Accept: 'application/vnd.github.v3+json',
       },
     });
@@ -28,7 +30,7 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
     if (!res.ok && res.status === 401) {
       res = await fetch('https://api.github.com/user', {
         headers: {
-          Authorization: `Bearer ${clean}`,
+          Authorization: `token ${clean}`,
           Accept: 'application/vnd.github.v3+json',
         },
       });

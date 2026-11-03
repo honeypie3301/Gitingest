@@ -1,4 +1,4 @@
-import { githubRateLimitMessage } from '../src/services/githubRateLimit.js';
+import { githubRateLimitMessage } from '../src/services/githubRateLimit';
 
 const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').toLowerCase();
 const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;

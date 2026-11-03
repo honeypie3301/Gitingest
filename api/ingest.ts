@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ArchiveDownloadError, downloadArchive, ingestArchive } from '../worker/archive.js';
-import { parseGitHubUrl } from '../src/services/ingestFormatting.js';
-import { checkOwnerAuth } from '../lib/owner-auth.js';
-import { submitWorkerJob } from '../lib/worker-proxy.js';
-import { GitHubRateLimitError, githubRateLimitMessage } from '../src/services/githubRateLimit.js';
+import { ArchiveDownloadError, downloadArchive, ingestArchive } from '../worker/archive';
+import { parseGitHubUrl } from '../src/services/ingestFormatting';
+import { checkOwnerAuth } from '../lib/owner-auth';
+import { submitWorkerJob } from '../lib/worker-proxy';
+import { GitHubRateLimitError, githubRateLimitMessage } from '../src/services/githubRateLimit';
 
 export const config = {
   maxDuration: 60, // allow up to 60s execution for large repos
