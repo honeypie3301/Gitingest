@@ -16,6 +16,14 @@ const startupDir = process.platform === 'win32'
   ? path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
   : null;
 
+// Ensure production bundles are fresh before setting up autostart
+try {
+  console.log('Building latest production bundle...');
+  execSync('npm run build', { stdio: 'inherit' });
+} catch (e) {
+  console.warn('[Warning] Pre-build failed, proceeding with existing bundle.');
+}
+
 // 2. Generate the silent VBScript launcher in the project root
 // Optimized: Native node execution on pre-bundled server with V8 GC + 512MB memory limit
 const nodePath = process.execPath;
