@@ -89,9 +89,6 @@ export default function App() {
   const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
 
   const refreshTokens = async () => {
-    const status = await checkServerTokenStatus();
-    setTokenStatus(status);
-
     const savedPat = getSavedToken();
     if (savedPat) {
       try {
@@ -102,21 +99,32 @@ export default function App() {
             source: 'saved_pat',
             user: authRes.user,
           });
-          loadRepos(authRes.user.login);
+          loadRepos(savedPat, authRes.user.login);
           return;
         }
       } catch {}
     }
 
+    const status = await checkServerTokenStatus();
     if (status.configured && status.user) {
-      loadRepos(status.user.login);
+      setTokenStatus(status);
+      loadRepos(undefined, status.user.login);
+    } else {
+      setTokenStatus({ configured: false, source: 'none', user: null });
+      setUserRepos([]);
+      try {
+        localStorage.removeItem('gitingest_cached_repos');
+      } catch {}
     }
   };
 
-  const loadRepos = async (username = 'honeypie3301') => {
+  const loadRepos = async (token?: string, username?: string) => {
+    if (!token && !username) {
+      setUserRepos([]);
+      return;
+    }
     setIsLoadingRepos(true);
-    const token = getSavedToken();
-    const repos = await fetchUserRepos(token || undefined, username);
+    const repos = await fetchUserRepos(token, username);
     setUserRepos(repos);
     setIsLoadingRepos(false);
   };
@@ -149,7 +157,7 @@ export default function App() {
         source: 'saved_pat',
         user: authRes.user || null,
       });
-      loadRepos(authRes.user?.login || 'honeypie3301');
+      loadRepos(input, authRes.user?.login);
     } catch {
       setAuthError('Network error while connecting to authentication server.');
     } finally {
@@ -461,7 +469,6 @@ export default function App() {
             <div className="w-6 h-6 rounded bg-black border border-amber-500/60 flex items-center justify-center font-mono text-xs font-bold text-amber-400">
               G
             </div>
-            <span className="text-sm font-extrabold text-white">GitIngest Personal</span>
           </div>
 
           <div className="flex items-center gap-4 text-xs font-bold text-gray-400">

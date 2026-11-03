@@ -58,32 +58,6 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
           }
         }
       } catch {}
-
-      const candidateRepos = ['Personal-Gitingest', 'Gitingest', 'gitingest'];
-      for (const repoName of candidateRepos) {
-        try {
-          const repoRes = await fetch(`https://api.github.com/repos/honeypie3301/${repoName}`, {
-            headers: {
-              Authorization: `Bearer ${clean}`,
-              Accept: 'application/vnd.github.v3+json',
-            },
-          });
-          if (repoRes.ok) {
-            const repoData = await repoRes.json();
-            if (repoData.owner) {
-              return {
-                id: repoData.owner.id,
-                login: repoData.owner.login,
-                avatar_url: repoData.owner.avatar_url,
-                name: repoData.owner.login,
-                html_url: repoData.owner.html_url,
-              };
-            }
-          }
-        } catch {
-          // try next candidate repo
-        }
-      }
     }
 
     if (!res.ok) return null;
@@ -102,16 +76,22 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
   }
 }
 
-const CACHED_REPOS_KEY = 'gitingest_cached_repos';
-
-export async function fetchUserRepos(token?: string, fallbackUser = 'honeypie3301'): Promise<RepoSummary[]> {
+export async function fetchUserRepos(token?: string, userLogin?: string): Promise<RepoSummary[]> {
   const isSecretKey = token && !token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_');
   const validGitHubToken = token && !isSecretKey ? token.trim() : undefined;
+
+  // If no token is provided and no user is signed in, do not fetch or display another user's repos
+  if (!validGitHubToken && !userLogin) {
+    return [];
+  }
+
+  const effectiveUser = userLogin?.toLowerCase();
+  const cacheKey = effectiveUser ? `gitingest_cached_repos_${effectiveUser}` : 'gitingest_cached_repos_anon';
 
   // 1. Try to load cached repos first for instant display
   let cached: RepoSummary[] = [];
   try {
-    const rawCache = localStorage.getItem(CACHED_REPOS_KEY);
+    const rawCache = localStorage.getItem(cacheKey);
     if (rawCache) {
       cached = JSON.parse(rawCache);
     }
@@ -128,7 +108,7 @@ export async function fetchUserRepos(token?: string, fallbackUser = 'honeypie330
 
     const url = validGitHubToken
       ? 'https://api.github.com/user/repos?sort=updated&per_page=12&affiliation=owner'
-      : `https://api.github.com/users/${fallbackUser}/repos?sort=updated&per_page=12`;
+      : `https://api.github.com/users/${userLogin}/repos?sort=updated&per_page=12`;
 
     const res = await fetch(url, { headers });
     if (!res.ok) {
@@ -149,7 +129,7 @@ export async function fetchUserRepos(token?: string, fallbackUser = 'honeypie330
 
     if (mapped.length > 0) {
       try {
-        localStorage.setItem(CACHED_REPOS_KEY, JSON.stringify(mapped));
+        localStorage.setItem(cacheKey, JSON.stringify(mapped));
       } catch {}
     }
 

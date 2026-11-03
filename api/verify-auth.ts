@@ -99,7 +99,7 @@ export default async function handler(req: any, res: any) {
           });
           if (repoCheck.ok) {
             const repoData = await repoCheck.json();
-            if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+            if (repoData.owner) {
               return res.json({
                 success: true,
                 user: {
@@ -131,10 +131,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const userData = await ghRes.json();
-    const isLoginMatch = userData.login && userData.login.toLowerCase() === OWNER_GITHUB_LOGIN;
-    const isIdMatch = !OWNER_GITHUB_ID || userData.id === OWNER_GITHUB_ID;
-
-    if (isLoginMatch && isIdMatch) {
+    if (userData && userData.login) {
       return res.json({
         success: true,
         user: {
@@ -142,7 +139,7 @@ export default async function handler(req: any, res: any) {
           node_id: userData.node_id,
           login: userData.login,
           avatar_url: userData.avatar_url,
-          name: userData.name,
+          name: userData.name || userData.login,
           html_url: userData.html_url,
         },
       });
@@ -150,7 +147,7 @@ export default async function handler(req: any, res: any) {
 
     return res.status(401).json({
       success: false,
-      error: `Unauthorized: Token belongs to @${userData.login}, not instance owner @${OWNER_GITHUB_LOGIN}.`,
+      error: 'Invalid GitHub user data returned by API.',
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Verification failed' });

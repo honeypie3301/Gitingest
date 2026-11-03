@@ -172,14 +172,8 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
   // 3. Client-side fallback via GitHub API if server failed or rejected with network error
   try {
     const ghUser = await verifyGitHubToken(clean);
-    if (ghUser && isVerifiedOwner(ghUser)) {
+    if (ghUser) {
       return { success: true, user: ghUser };
-    }
-    if (ghUser && !isVerifiedOwner(ghUser)) {
-      return {
-        success: false,
-        error: `Token belongs to @${ghUser.login}, not owner @${OWNER_GITHUB_LOGIN}.`,
-      };
     }
   } catch {
     // ignore client fallback error

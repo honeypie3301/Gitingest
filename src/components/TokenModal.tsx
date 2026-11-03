@@ -73,6 +73,13 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
     setTokenInput('');
     setVerifiedUser(null);
     setVerifyError(null);
+    try {
+      localStorage.removeItem('gitingest_cached_repos');
+      localStorage.removeItem('gitingest_cached_repos_anon');
+      if (verifiedUser?.login) {
+        localStorage.removeItem(`gitingest_cached_repos_${verifiedUser.login.toLowerCase()}`);
+      }
+    } catch {}
     onTokenUpdated();
   };
 

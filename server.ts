@@ -161,7 +161,7 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
         if (userReposRes.ok) {
           const repos = await userReposRes.json();
           if (Array.isArray(repos) && repos.length > 0) {
-            const matchedRepo = repos.find((r: any) => r.owner && (!OWNER_GITHUB_LOGIN || r.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN)) || repos[0];
+            const matchedRepo = repos.find((r: any) => r.owner) || repos[0];
             if (matchedRepo?.owner) {
               const user = {
                 id: matchedRepo.owner.id,
@@ -170,7 +170,8 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
                 name: matchedRepo.owner.login,
                 html_url: matchedRepo.owner.html_url,
               };
-              tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+              const isOwner = matchedRepo.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+              tokenCache.set(clean, { isOwner, user, cachedAt: now });
               return { authorized: true, user };
             }
           }
@@ -192,7 +193,7 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
           });
           if (repoCheck.ok) {
             const repoData = await repoCheck.json();
-            if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+            if (repoData.owner) {
               const user = {
                 id: repoData.owner.id,
                 login: repoData.owner.login,
@@ -200,7 +201,8 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
                 name: repoData.owner.login,
                 html_url: repoData.owner.html_url,
               };
-              tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+              const isOwner = repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+              tokenCache.set(clean, { isOwner, user, cachedAt: now });
               return { authorized: true, user };
             }
           }
@@ -230,25 +232,23 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
     }
 
     const userData = await ghRes.json();
-    const isLoginMatch = userData.login && userData.login.toLowerCase() === OWNER_GITHUB_LOGIN;
-    const isIdMatch = !OWNER_GITHUB_ID || userData.id === OWNER_GITHUB_ID;
-
-    if (isLoginMatch && isIdMatch) {
+    if (userData && userData.login) {
       const user = {
         id: userData.id,
         node_id: userData.node_id,
         login: userData.login,
         avatar_url: userData.avatar_url,
-        name: userData.name,
+        name: userData.name || userData.login,
         html_url: userData.html_url,
       };
-      tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+      const isOwner = userData.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+      tokenCache.set(clean, { isOwner, user, cachedAt: now });
       return { authorized: true, user };
     }
 
     return {
       authorized: false,
-      reason: `Unauthorized: Token belongs to @${userData.login}, not instance owner @${OWNER_GITHUB_LOGIN}.`,
+      reason: 'Invalid GitHub user data returned by API.',
     };
   } catch (err: any) {
     return { authorized: false, reason: `Failed to verify token: ${err.message}` };
@@ -279,15 +279,14 @@ app.post('/api/verify-auth', async (req, res) => {
 app.get('/api/user-status', async (req, res) => {
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
-  const tokenToCheck = bearerToken || process.env.GITHUB_TOKEN;
 
-  if (!tokenToCheck) {
+  if (!bearerToken) {
     return res.json({ configured: false, user: null, authorized: false });
   }
 
-  const check = await verifyOwnerCredentials(tokenToCheck);
+  const check = await verifyOwnerCredentials(bearerToken);
   return res.json({
-    configured: true,
+    configured: check.authorized,
     authorized: check.authorized,
     user: check.user || null,
   });
