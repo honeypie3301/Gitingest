@@ -324,11 +324,6 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
               <h3 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
                 <FileText className="w-5 h-5 text-amber-400" />
                 <span>Files Content</span>
-                {isHugeContent && (
-                  <span className="text-xs font-mono font-bold text-amber-400 bg-amber-950/40 border border-amber-600/50 px-2 py-0.5 rounded">
-                    Large Digest ({(((result.content_chars ?? result.content?.length) || 0) / (1024 * 1024)).toFixed(1)}MB)
-                  </span>
-                )}
               </h3>
               <div className="flex items-center gap-2">
                 <button

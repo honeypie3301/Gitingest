@@ -71,34 +71,60 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
   }
 }
 
+const CACHED_REPOS_KEY = 'gitingest_cached_repos';
+
 export async function fetchUserRepos(token?: string, fallbackUser = 'honeypie3301'): Promise<RepoSummary[]> {
+  const isSecretKey = token && !token.startsWith('ghp_') && !token.startsWith('github_pat_') && !token.startsWith('gho_');
+  const validGitHubToken = token && !isSecretKey ? token.trim() : undefined;
+
+  // 1. Try to load cached repos first for instant display
+  let cached: RepoSummary[] = [];
+  try {
+    const rawCache = localStorage.getItem(CACHED_REPOS_KEY);
+    if (rawCache) {
+      cached = JSON.parse(rawCache);
+    }
+  } catch {}
+
   try {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'GitIngest-UserRepos',
     };
-    if (token) {
-      headers.Authorization = `Bearer ${token.trim()}`;
+    if (validGitHubToken) {
+      headers.Authorization = `Bearer ${validGitHubToken}`;
     }
 
-    const url = token
+    const url = validGitHubToken
       ? 'https://api.github.com/user/repos?sort=updated&per_page=12&affiliation=owner'
       : `https://api.github.com/users/${fallbackUser}/repos?sort=updated&per_page=12`;
 
     const res = await fetch(url, { headers });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      // If rate limited or failed, return cached repos if available
+      return cached.length > 0 ? cached : [];
+    }
 
     const repos = await res.json();
-    if (!Array.isArray(repos)) return [];
+    if (!Array.isArray(repos)) return cached.length > 0 ? cached : [];
 
-    return repos.map((r: any) => ({
+    const mapped: RepoSummary[] = repos.map((r: any) => ({
       name: r.name,
       full_name: r.full_name,
       is_private: Boolean(r.private),
       description: r.description,
       default_branch: r.default_branch || 'main',
     }));
+
+    if (mapped.length > 0) {
+      try {
+        localStorage.setItem(CACHED_REPOS_KEY, JSON.stringify(mapped));
+      } catch {}
+    }
+
+    return mapped;
   } catch {
-    return [];
+    return cached.length > 0 ? cached : [];
   }
 }
 
