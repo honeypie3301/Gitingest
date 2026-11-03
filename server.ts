@@ -305,13 +305,8 @@ app.post('/api/ingest', async (req, res) => {
   const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
   const incomingToken = bearerToken || req.body.token || process.env.GITHUB_TOKEN;
 
-  // Enforce server-side authorization
-  const authCheck = await verifyOwnerCredentials(incomingToken);
-  if (!authCheck.authorized) {
-    return res.status(authCheck.status || 401).json({
-      error: authCheck.status === 429 ? authCheck.reason : `Unauthorized: ${authCheck.reason || 'Valid owner Personal Access Token or access key is required.'}`,
-    });
-  }
+  // In public mode, all users can ingest repositories without owner PIN/key
+
 
   const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token, decompile_classes = false } = req.body;
 

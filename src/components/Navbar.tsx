@@ -32,7 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 gitingest
               </span>
               <span className="bg-amber-500/20 border border-amber-500/60 px-1.5 py-0.2 rounded text-[10px] sm:text-[11px] font-bold text-amber-300 uppercase tracking-wider">
-                Personal
+                Public
               </span>
             </div>
           </button>
@@ -40,13 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right side controls */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Lock status indicator if owner lock is on */}
-          {isLocked && (
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-950/60 border border-amber-500/50 text-amber-300 text-xs font-mono">
-              <Lock className="w-3.5 h-3.5" />
-              <span>Owner Locked</span>
-            </div>
-          )}
 
           {/* GitHub Token / Private Access Pill */}
           <button
@@ -65,7 +58,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {tokenStatus.user ? `@${tokenStatus.user.login}` : 'PAT Saved'}
                 </span>
                 <span className="md:hidden">PAT Active</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
               </>
             ) : (
               <>

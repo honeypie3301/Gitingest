@@ -92,18 +92,11 @@ export default function App() {
     const status = await checkServerTokenStatus();
     setTokenStatus(status);
 
-    if (status.configured && status.user && isVerifiedOwner(status.user)) {
-      setIsLocked(false);
-      loadRepos(status.user.login);
-      return;
-    }
-
     const savedPat = getSavedToken();
     if (savedPat) {
       try {
         const authRes = await verifyAuthWithServer(savedPat);
-        if (authRes.success && authRes.user && isVerifiedOwner(authRes.user)) {
-          setIsLocked(false);
+        if (authRes.success && authRes.user) {
           setTokenStatus({
             configured: true,
             source: 'saved_pat',
@@ -115,7 +108,9 @@ export default function App() {
       } catch {}
     }
 
-    setIsLocked(true);
+    if (status.configured && status.user) {
+      loadRepos(status.user.login);
+    }
   };
 
   const loadRepos = async (username = 'honeypie3301') => {
@@ -244,6 +239,9 @@ export default function App() {
 
     try {
       const data = await performIngest(req, abortController.signal);
+      if (data.mode_switched) {
+        try { localStorage.setItem('gitingest_fallback_active', 'true'); } catch {}
+      }
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id === sessionId) {
@@ -380,6 +378,27 @@ export default function App() {
           </div>
         ) : (
           <main className="w-full pt-6 sm:pt-10 pb-16">
+            {/* Fallback Mode Persistent Alert Banner (if activated) */}
+            {typeof window !== 'undefined' && localStorage.getItem('gitingest_fallback_active') === 'true' && (
+              <div className="max-w-5xl 2xl:max-w-6xl mx-auto mb-6 px-3 sm:px-6">
+                <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-xl px-4 py-2.5 text-xs font-mono text-amber-300 shadow-[2px_2px_0_0_#000000] flex items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-bold text-amber-400 uppercase tracking-wide mr-1">[⚠ RATE-LIMIT FALLBACK ACTIVE]</span>
+                    <span className="truncate">GitHub API rate limit was encountered. Switched to offline Native Git CLI to complete your ingestion without interruption.</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem('gitingest_fallback_active');
+                      window.location.reload();
+                    }}
+                    className="text-[11px] underline text-amber-400 hover:text-amber-200 cursor-pointer shrink-0 ml-2"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Hero Section */}
             <div className="mb-6 sm:mb-8 text-center relative px-4">
               <div className="relative inline-block mx-auto">

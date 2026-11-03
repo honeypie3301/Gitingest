@@ -235,13 +235,27 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
         </div>
       </div>
 
-      {result.mode_switched && (
-        <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-xl px-4 py-3 text-xs font-mono text-amber-300 shadow-[2px_2px_0_0_#000000] flex items-center gap-2.5">
-          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
-          <div className="flex-1">
-            <span className="font-bold text-amber-400 uppercase tracking-wide mr-2">Rate-Limit Fallback Active:</span>
-            <span>GitHub API rate limit was encountered. Switched to offline Native Git CLI to complete your ingestion without interruption.</span>
+      {(result.mode_switched || (typeof window !== 'undefined' && localStorage.getItem('gitingest_fallback_active') === 'true')) && (
+        <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-xl px-4 py-3 text-xs font-mono text-amber-300 shadow-[2px_2px_0_0_#000000] flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold text-amber-400 uppercase tracking-wide mr-2">[⚠ RATE-LIMIT FALLBACK ACTIVE]</span>
+              <span>GitHub API rate limit was encountered. Switched to offline Native Git CLI to complete your ingestion without interruption.</span>
+            </div>
           </div>
+          <button
+            onClick={() => {
+              try {
+                localStorage.removeItem('gitingest_fallback_active');
+                window.location.reload();
+              } catch {}
+            }}
+            className="text-[11px] underline text-amber-400 hover:text-amber-200 cursor-pointer shrink-0"
+            title="Reset fallback status"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

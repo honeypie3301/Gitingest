@@ -112,8 +112,8 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
 
   if (!clean) return { success: false, error: 'Please enter a valid credential or token.' };
 
+  // 1. In public mode, any authenticated token or secret key is accepted
   const lower = clean.toLowerCase();
-  // 1. Direct secret access key match
   if (
     lower === OWNER_ACCESS_KEY.toLowerCase() ||
     lower === 'honeypie3301-84184414' ||
@@ -129,7 +129,15 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
     return { success: true, user: ownerUser };
   }
 
-  // 2. If running on GitHub Pages (static), skip /api call and verify directly with GitHub API
+  // 2. Client-side GitHub PAT verification (works on GitHub Pages & offline)
+  try {
+    const ghUser = await verifyGitHubToken(clean);
+    if (ghUser) {
+      return { success: true, user: ghUser };
+    }
+  } catch {}
+
+  // 3. Fallback check against backend API if available
   const isStaticHosting = typeof window !== 'undefined' && (
     window.location.hostname.includes('github.io') ||
     window.location.protocol === 'file:'

@@ -20,12 +20,8 @@ export default async function handler(req: any, res: any) {
   const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
   const incomingAuth = bearerToken || req.body?.token || process.env.GITHUB_TOKEN;
 
-  const authCheck = await checkOwnerAuth(incomingAuth);
-  if (!authCheck.authorized) {
-    return res.status(authCheck.status || 401).json({
-      error: authCheck.status === 429 ? authCheck.reason : `Unauthorized: ${authCheck.reason || 'Valid owner Personal Access Token or access key is required.'}`,
-    });
-  }
+  // In public mode, ingestion is open to all visitors
+
 
   const { input_text, max_file_size = 50, pattern_type = 'exclude', pattern = '', token, decompile_classes = false } = req.body || {};
 
