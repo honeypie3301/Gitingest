@@ -99,7 +99,7 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
               </div>
               <div>
                 <h3 className="text-xl font-extrabold text-white">Access & Security Settings</h3>
-                <p className="text-xs text-gray-400">PAT Persistence & Owner Protection</p>
+                <p className="text-xs text-gray-400">PAT Persistence & Unlimited Ingest Strategy</p>
               </div>
             </div>
             <button
@@ -131,7 +131,7 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
               }`}
             >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Owner Account & Backup</span>
+              <span>Unlimited Ingest & Local CLI</span>
             </button>
           </div>
 
@@ -230,39 +230,36 @@ export const TokenModal: React.FC<TokenModalProps> = ({ isOpen, onClose, onToken
               </div>
             </div>
           ) : (
-            /* Owner Lock & Backup Tab */
-            <div className="space-y-4">
+            /* Unlimited Ingest & Local CLI Tab */
+            <div className="space-y-3.5">
               <div className="text-xs leading-relaxed bg-[#0d1117] p-3.5 rounded-lg border-2 border-[#30363d] text-gray-300">
                 <div className="flex items-start gap-2">
-                  <ShieldCheck className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-bold text-white">Owner Account Restriction</span>
-                    <p className="mt-1">
-                      This instance strictly permits access exclusively to your GitHub account:{' '}
-                      <span className="text-amber-400 font-bold">@{OWNER_GITHUB_LOGIN}</span>.
+                    <span className="font-bold text-white">Unlimited Public Ingestion Engine</span>
+                    <p className="mt-1 text-[11px] text-gray-400 leading-relaxed">
+                      Public repositories are ingested via shallow git clone (<code className="text-amber-400">--depth 1</code>, sparse checkout) directly on disk. Because git clones over HTTPS do not count against GitHub's 60 req/hour REST API limit, you can ingest public repositories infinitely without hitting rate limits.
                     </p>
                   </div>
                 </div>
               </div>
 
               <div className="p-3.5 bg-[#0d1117] border-2 border-[#30363d] rounded-lg space-y-2 text-xs">
-                <div className="flex items-center justify-between text-gray-300">
-                  <span className="font-semibold text-gray-400">Authorized GitHub Username:</span>
-                  <span className="font-mono text-amber-400 font-bold">@{OWNER_GITHUB_LOGIN}</span>
-                </div>
-                <div className="flex items-center justify-between text-gray-300">
-                  <span className="font-semibold text-gray-400">Immutable Account ID:</span>
-                  <span className="font-mono text-white">{OWNER_GITHUB_ID}</span>
-                </div>
-                <div className="text-[11px] text-gray-400 pt-1 border-t border-[#21262d]">
-                  Verification checks your immutable numerical GitHub ID (<code className="text-amber-400">84184414</code>) so no other user with the same username can access your app.
+                <div className="flex items-start gap-2">
+                  <Key className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                  <div>
+                    <span className="font-bold text-white">Local GitHub CLI Fallback</span>
+                    <p className="mt-1 text-[11px] text-gray-400 leading-relaxed">
+                      When running GitIngest locally on your machine, the server automatically detects your active GitHub CLI session (<code className="text-amber-400">gh auth login</code>) and uses <code className="text-amber-400">gh repo clone</code> fallback, allowing seamless private repo ingestion with zero manual token configuration.
+                    </p>
+                  </div>
                 </div>
               </div>
 
               <div className="p-3.5 bg-amber-950/20 border-2 border-amber-600/40 rounded-lg text-xs space-y-1.5">
-                <span className="font-bold text-amber-300 block">Server-Side Secret Access Key</span>
+                <span className="font-bold text-amber-300 block">Server-Side Admin Key</span>
                 <p className="text-gray-300 text-[11px] leading-relaxed">
-                  Configured via <code className="text-amber-400">OWNER_ACCESS_KEY</code> in your deployment environment variables (.env / Vercel). Verified strictly on the server to prevent exposure.
+                  The server environment variable <code className="text-amber-400">OWNER_ACCESS_KEY</code> serves as an administrative server bypass key to authenticate without requiring external GitHub OAuth.
                 </p>
               </div>
             </div>

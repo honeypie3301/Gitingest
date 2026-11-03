@@ -645,10 +645,21 @@ app.post('/api/ingest', async (req, res) => {
   const tempDir = path.join(os.tmpdir(), `gitingest_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
 
   try {
+    // If no user token was provided, check if local machine has active GitHub CLI auth
+    let effectiveToken = activeToken;
+    if (!effectiveToken) {
+      try {
+        const { stdout: ghToken } = await execFileAsync('gh', ['auth', 'token'], { timeout: 3000 });
+        if (ghToken && ghToken.trim()) {
+          effectiveToken = ghToken.trim();
+        }
+      } catch {}
+    }
+
     const cloneUrl = isSshUrl
       ? `git@github.com:${owner}/${repo}.git`
-      : activeToken
-      ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git`
+      : effectiveToken
+      ? `https://x-access-token:${encodeURIComponent(effectiveToken)}@github.com/${owner}/${repo}.git`
       : `https://github.com/${owner}/${repo}.git`;
 
     // 1. High-Performance Clone Strategy:
@@ -675,25 +686,36 @@ app.post('/api/ingest', async (req, res) => {
       // 5-minute timeout
       await execFileAsync('git', cloneArgs, { timeout: 300000 });
     } catch (gitErr: any) {
-      const errMsg = gitErr.stderr || gitErr.message || '';
-      if (errMsg.includes('could not read Username') || errMsg.includes('Authentication failed') || errMsg.includes('Repository not found')) {
-        return res.status(403).json({
-          error: `Could not access repository "${owner}/${repo}". If this is a private repository, please ensure your GitHub Personal Access Token is configured with 'repo' scope.`,
-        });
-      }
+      // If git clone fails on local run, attempt GitHub CLI `gh repo clone` fallback
+      let ghCloneSucceeded = false;
+      try {
+        const ghCloneArgs = ['repo', 'clone', `${owner}/${repo}`, tempDir, '--', '--depth', '1', '--single-branch', '--no-tags'];
+        if (branch) ghCloneArgs.push('-b', branch);
+        await execFileAsync('gh', ghCloneArgs, { timeout: 300000 });
+        ghCloneSucceeded = true;
+      } catch {}
 
-      // Fallback: if server rejects options, retry standard minimal shallow clone
-      const fallbackArgs = [
-        'clone',
-        '--depth', '1',
-        '--single-branch',
-        '--no-tags',
-        '-c', 'core.packedGitLimit=128m',
-        '-c', 'core.deltaBaseCacheLimit=128m',
-      ];
-      if (branch) fallbackArgs.push('-b', branch);
-      fallbackArgs.push(cloneUrl, tempDir);
-      await execFileAsync('git', fallbackArgs, { timeout: 300000 });
+      if (!ghCloneSucceeded) {
+        const errMsg = gitErr.stderr || gitErr.message || '';
+        if (errMsg.includes('could not read Username') || errMsg.includes('Authentication failed') || errMsg.includes('Repository not found')) {
+          return res.status(403).json({
+            error: `Could not access repository "${owner}/${repo}". If this is a private repository, please ensure your GitHub Personal Access Token is configured with 'repo' scope, or run 'gh auth login' locally.`,
+          });
+        }
+
+        // Fallback: if server rejects options, retry standard minimal shallow clone
+        const fallbackArgs = [
+          'clone',
+          '--depth', '1',
+          '--single-branch',
+          '--no-tags',
+          '-c', 'core.packedGitLimit=128m',
+          '-c', 'core.deltaBaseCacheLimit=128m',
+        ];
+        if (branch) fallbackArgs.push('-b', branch);
+        fallbackArgs.push(cloneUrl, tempDir);
+        await execFileAsync('git', fallbackArgs, { timeout: 300000 });
+      }
     }
 
     // 2. Optimization: Sparse-checkout & checkout for subpaths
