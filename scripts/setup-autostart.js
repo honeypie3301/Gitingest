@@ -21,7 +21,13 @@ try {
   console.log('Building latest production bundle...');
   execSync('npm run build', { stdio: 'inherit' });
 } catch (e) {
-  console.warn('[Warning] Pre-build failed, proceeding with existing bundle.');
+  console.warn('[Warning] Pre-build failed. Attempting npm install to restore binaries...');
+  try {
+    execSync('npm install', { stdio: 'inherit' });
+    execSync('npm run build', { stdio: 'inherit' });
+  } catch (retryErr) {
+    console.error('[Error] Build failed even after npm install. Please check errors above.');
+  }
 }
 
 // 2. Generate the silent VBScript launcher in the project root
