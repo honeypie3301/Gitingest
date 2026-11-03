@@ -16,7 +16,7 @@ interface GitFormProps {
   onUrlChange?: (url: string) => void;
 }
 
-export const GitForm: React.FC<GitFormProps> = ({
+export const GitForm: React.FC<GitFormProps> = React.memo(({
   onIngest,
   isLoading,
   startTime,
@@ -344,4 +344,4 @@ export const GitForm: React.FC<GitFormProps> = ({
       </div>
     </div>
   );
-};
+});

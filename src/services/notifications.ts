@@ -110,19 +110,25 @@ class NotificationService {
   }
 
   /**
-   * Send notification across all channels:
-   * 1. Desktop notification (if permitted)
-   * 2. Web Audio chime
-   * 3. Tab title alert
+   * Send notification:
+   * - Audio chime: always plays to indicate completion
+   * - Desktop notification & tab title flash: ONLY sent if the user is in another tab or minimized
    */
   notifyIngestionDone(repoName: string, filesAnalyzed: number, durationSeconds?: number): void {
     // 1. Audio chime
     this.playChime();
 
-    // 2. Tab title flash
+    const isUserActiveInTab = typeof document !== 'undefined' && document.hasFocus() && document.visibilityState === 'visible';
+
+    // If user is actively looking at this tab, they see the result immediately — do not spam with OS notifications
+    if (isUserActiveInTab) {
+      return;
+    }
+
+    // 2. Tab title flash (only if user is not in tab)
     this.flashTabTitle(repoName);
 
-    // 3. Desktop Notification
+    // 3. Desktop Notification (only if user is not in tab)
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
       try {
         const timeStr = durationSeconds ? ` in ${durationSeconds.toFixed(1)}s` : '';

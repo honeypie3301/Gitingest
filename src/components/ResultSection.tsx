@@ -23,7 +23,7 @@ interface ResultSectionProps {
   onCancel?: () => void;
 }
 
-export const ResultSection: React.FC<ResultSectionProps> = ({
+export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
   result,
   error,
   isLoading,
@@ -358,4 +358,4 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
       </div>
     </div>
   );
-};
+});
