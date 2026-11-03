@@ -96,6 +96,553 @@ async function handleWorkerJob(req, res) {
   return forwardWorker(req, res, `/jobs/${id}`, req.method);
 }
 
+// src/services/decompiler/javaClassDecompiler.ts
+var CONSTANT_Utf8 = 1;
+var CONSTANT_Integer = 3;
+var CONSTANT_Float = 4;
+var CONSTANT_Long = 5;
+var CONSTANT_Double = 6;
+var CONSTANT_Class = 7;
+var CONSTANT_String = 8;
+var CONSTANT_Fieldref = 9;
+var CONSTANT_Methodref = 10;
+var CONSTANT_InterfaceMethodref = 11;
+var CONSTANT_NameAndType = 12;
+var CONSTANT_MethodHandle = 15;
+var CONSTANT_MethodType = 16;
+var CONSTANT_Dynamic = 17;
+var CONSTANT_InvokeDynamic = 18;
+var CONSTANT_Module = 19;
+var CONSTANT_Package = 20;
+var ACC_PUBLIC = 1;
+var ACC_PRIVATE = 2;
+var ACC_PROTECTED = 4;
+var ACC_STATIC = 8;
+var ACC_FINAL = 16;
+var ACC_SYNCHRONIZED = 32;
+var ACC_VOLATILE = 64;
+var ACC_TRANSIENT = 128;
+var ACC_NATIVE = 256;
+var ACC_INTERFACE = 512;
+var ACC_ABSTRACT = 1024;
+var ACC_ENUM = 16384;
+var ByteReader = class {
+  constructor(buffer) {
+    this.offset = 0;
+    const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    this.view = new DataView(ab);
+  }
+  get remaining() {
+    return this.view.byteLength - this.offset;
+  }
+  readU1() {
+    const val = this.view.getUint8(this.offset);
+    this.offset += 1;
+    return val;
+  }
+  readU2() {
+    const val = this.view.getUint16(this.offset, false);
+    this.offset += 2;
+    return val;
+  }
+  readU4() {
+    const val = this.view.getUint32(this.offset, false);
+    this.offset += 4;
+    return val;
+  }
+  readBytes(length) {
+    const bytes = new Uint8Array(this.view.buffer, this.offset, length);
+    this.offset += length;
+    return bytes;
+  }
+  skip(count) {
+    this.offset += count;
+  }
+};
+function isJavaClassBuffer(buf) {
+  if (!buf || buf.length < 8) return false;
+  return buf[0] === 202 && buf[1] === 254 && buf[2] === 186 && buf[3] === 190;
+}
+function decompileJavaClass(buffer, classNameFallback = "DecompiledClass") {
+  try {
+    if (!isJavaClassBuffer(buffer)) {
+      return `// Not a valid Java class file (missing CAFEBABE magic header)
+`;
+    }
+    const reader = new ByteReader(buffer);
+    const magic = reader.readU4();
+    if (magic !== 3405691582) {
+      return `// Invalid magic header: 0x${magic.toString(16)}
+`;
+    }
+    const minorVersion = reader.readU2();
+    const majorVersion = reader.readU2();
+    const constantPoolCount = reader.readU2();
+    const cp = new Array(constantPoolCount).fill(null);
+    for (let i = 1; i < constantPoolCount; i++) {
+      const tag = reader.readU1();
+      switch (tag) {
+        case CONSTANT_Utf8: {
+          const len = reader.readU2();
+          const bytes = reader.readBytes(len);
+          const str = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+          cp[i] = { tag, value: str };
+          break;
+        }
+        case CONSTANT_Integer:
+          cp[i] = { tag, value: reader.readU4() };
+          break;
+        case CONSTANT_Float:
+          cp[i] = { tag, value: reader.readU4() };
+          break;
+        case CONSTANT_Long:
+          reader.skip(8);
+          cp[i] = { tag, value: "long" };
+          i++;
+          break;
+        case CONSTANT_Double:
+          reader.skip(8);
+          cp[i] = { tag, value: "double" };
+          i++;
+          break;
+        case CONSTANT_Class:
+          cp[i] = { tag, nameIndex: reader.readU2() };
+          break;
+        case CONSTANT_String:
+          cp[i] = { tag, stringIndex: reader.readU2() };
+          break;
+        case CONSTANT_Fieldref:
+        case CONSTANT_Methodref:
+        case CONSTANT_InterfaceMethodref:
+          cp[i] = {
+            tag,
+            classIndex: reader.readU2(),
+            nameAndTypeIndex: reader.readU2()
+          };
+          break;
+        case CONSTANT_NameAndType:
+          cp[i] = {
+            tag,
+            nameIndex: reader.readU2(),
+            descriptorIndex: reader.readU2()
+          };
+          break;
+        case CONSTANT_MethodHandle:
+          reader.skip(3);
+          cp[i] = { tag };
+          break;
+        case CONSTANT_MethodType:
+          reader.skip(2);
+          cp[i] = { tag };
+          break;
+        case CONSTANT_Dynamic:
+        case CONSTANT_InvokeDynamic:
+          reader.skip(4);
+          cp[i] = { tag };
+          break;
+        case CONSTANT_Module:
+        case CONSTANT_Package:
+          reader.skip(2);
+          cp[i] = { tag };
+          break;
+        default:
+          break;
+      }
+    }
+    const getUtf8 = (idx) => {
+      const entry = cp[idx];
+      return entry && entry.tag === CONSTANT_Utf8 ? entry.value : "";
+    };
+    const getClassName = (classIdx) => {
+      const entry = cp[classIdx];
+      if (entry && entry.tag === CONSTANT_Class) {
+        return getUtf8(entry.nameIndex).replace(/\//g, ".");
+      }
+      return "";
+    };
+    const accessFlags = reader.readU2();
+    const thisClassIdx = reader.readU2();
+    const superClassIdx = reader.readU2();
+    const fullClassName = getClassName(thisClassIdx) || classNameFallback;
+    const superClassName = getClassName(superClassIdx);
+    const interfacesCount = reader.readU2();
+    const interfaces = [];
+    for (let i = 0; i < interfacesCount; i++) {
+      const ifaceIdx = reader.readU2();
+      const ifaceName = getClassName(ifaceIdx);
+      if (ifaceName) interfaces.push(ifaceName);
+    }
+    const javaVersionMap = {
+      49: "Java 5",
+      50: "Java 6",
+      51: "Java 7",
+      52: "Java 8",
+      53: "Java 9",
+      54: "Java 10",
+      55: "Java 11",
+      56: "Java 12",
+      57: "Java 13",
+      58: "Java 14",
+      59: "Java 15",
+      60: "Java 16",
+      61: "Java 17",
+      62: "Java 18",
+      63: "Java 19",
+      64: "Java 20",
+      65: "Java 21",
+      66: "Java 22",
+      67: "Java 23"
+    };
+    const javaVersionStr = javaVersionMap[majorVersion] || `class version ${majorVersion}.${minorVersion}`;
+    const fieldsCount = reader.readU2();
+    const fields = [];
+    for (let i = 0; i < fieldsCount; i++) {
+      const fFlags = reader.readU2();
+      const fName = getUtf8(reader.readU2());
+      const fDesc = getUtf8(reader.readU2());
+      const attrCount = reader.readU2();
+      let fSig;
+      for (let a = 0; a < attrCount; a++) {
+        const attrName = getUtf8(reader.readU2());
+        const attrLen = reader.readU4();
+        if (attrName === "Signature" && attrLen === 2) {
+          fSig = getUtf8(reader.readU2());
+        } else {
+          reader.skip(attrLen);
+        }
+      }
+      fields.push({ accessFlags: fFlags, name: fName, descriptor: fDesc, signature: fSig });
+    }
+    const methodsCount = reader.readU2();
+    const methods = [];
+    for (let i = 0; i < methodsCount; i++) {
+      const mFlags = reader.readU2();
+      const mName = getUtf8(reader.readU2());
+      const mDesc = getUtf8(reader.readU2());
+      const attrCount = reader.readU2();
+      let mSig;
+      let instructions = [];
+      for (let a = 0; a < attrCount; a++) {
+        const attrName = getUtf8(reader.readU2());
+        const attrLen = reader.readU4();
+        if (attrName === "Signature" && attrLen === 2) {
+          mSig = getUtf8(reader.readU2());
+        } else if (attrName === "Code") {
+          const maxStack = reader.readU2();
+          const maxLocals = reader.readU2();
+          const codeLen = reader.readU4();
+          const codeBytes = reader.readBytes(codeLen);
+          instructions = disassembleBytecode(codeBytes, cp, getUtf8, getClassName);
+          const exceptionTableLen = reader.readU2();
+          reader.skip(exceptionTableLen * 8);
+          const codeAttrCount = reader.readU2();
+          for (let ca = 0; ca < codeAttrCount; ca++) {
+            reader.readU2();
+            const caLen = reader.readU4();
+            reader.skip(caLen);
+          }
+        } else {
+          reader.skip(attrLen);
+        }
+      }
+      methods.push({
+        accessFlags: mFlags,
+        name: mName,
+        descriptor: mDesc,
+        signature: mSig,
+        instructions
+      });
+    }
+    const classAttrCount = reader.readU2();
+    let classSignature;
+    for (let a = 0; a < classAttrCount; a++) {
+      const attrName = getUtf8(reader.readU2());
+      const attrLen = reader.readU4();
+      if (attrName === "Signature" && attrLen === 2) {
+        classSignature = getUtf8(reader.readU2());
+      } else {
+        reader.skip(attrLen);
+      }
+    }
+    return formatJavaSource({
+      fullClassName,
+      superClassName,
+      interfaces,
+      accessFlags,
+      fields,
+      methods,
+      javaVersionStr,
+      classSignature
+    });
+  } catch (err) {
+    return `// Decompiler error: ${err.message || "Failed to parse class file"}
+`;
+  }
+}
+function parseFieldDescriptor(desc) {
+  if (!desc) return "void";
+  if (desc === "Z") return "boolean";
+  if (desc === "B") return "byte";
+  if (desc === "C") return "char";
+  if (desc === "S") return "short";
+  if (desc === "I") return "int";
+  if (desc === "J") return "long";
+  if (desc === "F") return "float";
+  if (desc === "D") return "double";
+  if (desc === "V") return "void";
+  if (desc.startsWith("[")) {
+    return parseFieldDescriptor(desc.substring(1)) + "[]";
+  }
+  if (desc.startsWith("L") && desc.endsWith(";")) {
+    const raw = desc.substring(1, desc.length - 1).replace(/\//g, ".");
+    return cleanTypeName(raw);
+  }
+  return desc;
+}
+function cleanTypeName(full) {
+  if (full.startsWith("java.lang.") && full.split(".").length === 3) {
+    return full.substring(10);
+  }
+  return full;
+}
+function parseMethodDescriptor(desc) {
+  const match = desc.match(/^\((.*?)\)(.*)$/);
+  if (!match) return { params: [], returnType: "void" };
+  const rawParams = match[1];
+  const rawRet = match[2];
+  const params = [];
+  let idx = 0;
+  while (idx < rawParams.length) {
+    let arrDim = 0;
+    while (rawParams[idx] === "[") {
+      arrDim++;
+      idx++;
+    }
+    const ch = rawParams[idx];
+    if (ch === "L") {
+      const end = rawParams.indexOf(";", idx);
+      if (end === -1) break;
+      const type = rawParams.substring(idx + 1, end).replace(/\//g, ".");
+      params.push(cleanTypeName(type) + "[]".repeat(arrDim));
+      idx = end + 1;
+    } else {
+      const primitive = parseFieldDescriptor(ch);
+      params.push(primitive + "[]".repeat(arrDim));
+      idx++;
+    }
+  }
+  return {
+    params,
+    returnType: cleanTypeName(parseFieldDescriptor(rawRet))
+  };
+}
+function formatAccessFlags(flags, isClass = false, isInterface = false) {
+  const parts = [];
+  if (flags & ACC_PUBLIC) parts.push("public");
+  if (flags & ACC_PROTECTED) parts.push("protected");
+  if (flags & ACC_PRIVATE) parts.push("private");
+  if (flags & ACC_ABSTRACT && !isInterface) parts.push("abstract");
+  if (flags & ACC_STATIC) parts.push("static");
+  if (flags & ACC_FINAL) parts.push("final");
+  if (flags & ACC_SYNCHRONIZED) parts.push("synchronized");
+  if (flags & ACC_NATIVE) parts.push("native");
+  if (flags & ACC_VOLATILE) parts.push("volatile");
+  if (flags & ACC_TRANSIENT) parts.push("transient");
+  return parts.join(" ");
+}
+function disassembleBytecode(code, cp, getUtf8, getClassName) {
+  const statements = [];
+  let i = 0;
+  const getNameAndType = (idx) => {
+    const entry = cp[idx];
+    if (entry && entry.tag === CONSTANT_NameAndType) {
+      return {
+        name: getUtf8(entry.nameIndex),
+        descriptor: getUtf8(entry.descriptorIndex)
+      };
+    }
+    return { name: "", descriptor: "" };
+  };
+  const getMemberRef = (idx) => {
+    const entry = cp[idx];
+    if (entry && (entry.tag === CONSTANT_Methodref || entry.tag === CONSTANT_Fieldref || entry.tag === CONSTANT_InterfaceMethodref)) {
+      const owner = getClassName(entry.classIndex);
+      const nt = getNameAndType(entry.nameAndTypeIndex);
+      return { owner, name: nt.name, descriptor: nt.descriptor };
+    }
+    return { owner: "", name: "", descriptor: "" };
+  };
+  while (i < code.length) {
+    const op = code[i];
+    switch (op) {
+      case 0:
+        i++;
+        break;
+      case 1:
+        statements.push("// push null");
+        i++;
+        break;
+      case 178:
+      // getstatic
+      case 180: {
+        const refIdx = code[i + 1] << 8 | code[i + 2];
+        const member = getMemberRef(refIdx);
+        const prefix = op === 178 ? member.owner : "this";
+        statements.push(`// access ${prefix}.${member.name} (${cleanTypeName(parseFieldDescriptor(member.descriptor))})`);
+        i += 3;
+        break;
+      }
+      case 179:
+      // putstatic
+      case 181: {
+        const refIdx = code[i + 1] << 8 | code[i + 2];
+        const member = getMemberRef(refIdx);
+        const prefix = op === 179 ? member.owner : "this";
+        statements.push(`// assign ${prefix}.${member.name}`);
+        i += 3;
+        break;
+      }
+      case 182:
+      // invokevirtual
+      case 183:
+      // invokespecial
+      case 184:
+      // invokestatic
+      case 185: {
+        const refIdx = code[i + 1] << 8 | code[i + 2];
+        const member = getMemberRef(refIdx);
+        const callType = op === 184 ? "static call" : op === 183 ? "special call" : "call";
+        statements.push(`${callType} ${member.owner}.${member.name}(...);`);
+        i += op === 185 ? 5 : 3;
+        break;
+      }
+      case 18: {
+        const cIdx = code[i + 1];
+        const cEntry = cp[cIdx];
+        if (cEntry && cEntry.tag === CONSTANT_String) {
+          const s = getUtf8(cEntry.stringIndex);
+          statements.push(`// load string "${s.length > 50 ? s.slice(0, 47) + "..." : s}"`);
+        }
+        i += 2;
+        break;
+      }
+      case 187: {
+        const classIdx = code[i + 1] << 8 | code[i + 2];
+        const clsName = getClassName(classIdx);
+        statements.push(`new ${clsName}();`);
+        i += 3;
+        break;
+      }
+      case 172:
+      // ireturn
+      case 173:
+      // lreturn
+      case 174:
+      // freturn
+      case 175:
+      // dreturn
+      case 176:
+        statements.push("return result;");
+        i++;
+        break;
+      case 177:
+        statements.push("return;");
+        i++;
+        break;
+      case 191:
+        statements.push("throw exception;");
+        i++;
+        break;
+      default:
+        i++;
+        break;
+    }
+  }
+  const cleaned = [];
+  let lastWasComment = false;
+  for (const s of statements) {
+    if (s.startsWith("//")) {
+      if (!lastWasComment) cleaned.push(s);
+      lastWasComment = true;
+    } else {
+      cleaned.push(s);
+      lastWasComment = false;
+    }
+  }
+  return cleaned.slice(0, 20);
+}
+function formatJavaSource(info) {
+  const parts = info.fullClassName.split(".");
+  const simpleName = parts.pop() || "Unknown";
+  const packageName = parts.join(".");
+  const isInterface = Boolean(info.accessFlags & ACC_INTERFACE);
+  const isEnum = Boolean(info.accessFlags & ACC_ENUM);
+  const kind = isInterface ? "interface" : isEnum ? "enum" : "class";
+  const lines = [];
+  lines.push(`// Decompiled from Java .class bytecode (${info.javaVersionStr})`);
+  lines.push(`// Source: ${info.fullClassName}`);
+  lines.push("");
+  if (packageName) {
+    lines.push(`package ${packageName};`);
+    lines.push("");
+  }
+  const classModifier = formatAccessFlags(info.accessFlags, true, isInterface);
+  let decl = `${classModifier ? classModifier + " " : ""}${kind} ${simpleName}`;
+  if (info.superClassName && info.superClassName !== "java.lang.Object" && !isInterface && !isEnum) {
+    decl += ` extends ${info.superClassName}`;
+  }
+  if (info.interfaces.length > 0) {
+    decl += ` ${isInterface ? "extends" : "implements"} ${info.interfaces.join(", ")}`;
+  }
+  decl += " {";
+  lines.push(decl);
+  if (info.fields.length > 0) {
+    for (const f of info.fields) {
+      const fMods = formatAccessFlags(f.accessFlags);
+      const fType = cleanTypeName(parseFieldDescriptor(f.descriptor));
+      lines.push(`    ${fMods ? fMods + " " : ""}${fType} ${f.name};`);
+    }
+    lines.push("");
+  }
+  for (const m of info.methods) {
+    const isInit = m.name === "<init>";
+    const isClinit = m.name === "<clinit>";
+    if (isClinit) {
+      lines.push("    static {");
+      if (m.instructions && m.instructions.length > 0) {
+        for (const inst of m.instructions) {
+          lines.push(`        ${inst}`);
+        }
+      }
+      lines.push("    }");
+      lines.push("");
+      continue;
+    }
+    const mMods = formatAccessFlags(m.accessFlags);
+    const { params, returnType } = parseMethodDescriptor(m.descriptor);
+    const mName = isInit ? simpleName : m.name;
+    const mRet = isInit ? "" : returnType + " ";
+    const paramStr = params.map((p, idx) => `${p} arg${idx}`).join(", ");
+    const isAbstract = Boolean(m.accessFlags & ACC_ABSTRACT) || isInterface;
+    if (isAbstract) {
+      lines.push(`    ${mMods ? mMods + " " : ""}${mRet}${mName}(${paramStr});`);
+    } else {
+      lines.push(`    ${mMods ? mMods + " " : ""}${mRet}${mName}(${paramStr}) {`);
+      if (m.instructions && m.instructions.length > 0) {
+        for (const inst of m.instructions) {
+          lines.push(`        ${inst}`);
+        }
+      } else {
+        lines.push("        // [Compiled method body]");
+      }
+      lines.push("    }");
+    }
+    lines.push("");
+  }
+  lines.push("}");
+  return lines.join("\n");
+}
+
 // server.ts
 import { createServer as createViteServer } from "vite";
 dotenv.config();
@@ -111,48 +658,6 @@ function formatTokenCount(tokens) {
   if (tokens >= 1e6) return `${(tokens / 1e6).toFixed(1)}M`;
   if (tokens >= 1e3) return `${(tokens / 1e3).toFixed(1)}k`;
   return `${tokens}`;
-}
-var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "svg",
-  "ico",
-  "webp",
-  "bmp",
-  "pdf",
-  "zip",
-  "tar",
-  "gz",
-  "7z",
-  "rar",
-  "exe",
-  "dll",
-  "so",
-  "dylib",
-  "bin",
-  "pyc",
-  "pyo",
-  "pyd",
-  "woff",
-  "woff2",
-  "ttf",
-  "eot",
-  "mp3",
-  "mp4",
-  "mov",
-  "wav",
-  "jar",
-  "class",
-  "lockb",
-  "parquet",
-  "feather",
-  "wasm"
-]);
-function isBinaryExtension(filePath) {
-  const ext = filePath.split(".").pop()?.toLowerCase();
-  return ext ? BINARY_EXTENSIONS.has(ext) : false;
 }
 var OWNER_GITHUB_LOGIN2 = (process.env.OWNER_GITHUB_LOGIN || "honeypie3301").toLowerCase();
 var OWNER_GITHUB_ID2 = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
@@ -325,15 +830,119 @@ app.post("/api/ingest", async (req, res) => {
       error: authCheck.status === 429 ? authCheck.reason : `Unauthorized: ${authCheck.reason || "Valid owner Personal Access Token or access key is required."}`
     });
   }
-  const { input_text, max_file_size = 50, pattern_type = "exclude", pattern = "", token } = req.body;
+  const { input_text, max_file_size = 50, pattern_type = "exclude", pattern = "", token, decompile_classes = false } = req.body;
   if (!input_text || typeof input_text !== "string") {
     return res.status(400).json({ error: "Please provide a valid repository URL or path" });
   }
   if (process.env.INGEST_WORKER_URL) return submitWorkerJob(req, res);
   const activeToken = (bearerToken || token || process.env.GITHUB_TOKEN || "").trim();
+  const patterns = pattern.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
+  const compiledPatterns = patterns.map((pat) => {
+    const escaped = pat.replace(/\./g, "\\.").replace(/\*/g, ".*");
+    try {
+      return { regex: new RegExp(escaped, "i"), raw: pat };
+    } catch {
+      return { regex: null, raw: pat };
+    }
+  });
+  const isPathAllowed = (relPath) => {
+    if (compiledPatterns.length === 0) return true;
+    const matched = compiledPatterns.some(({ regex, raw }) => regex ? regex.test(relPath) : relPath.includes(raw));
+    return pattern_type === "include" ? matched : !matched;
+  };
+  const maxBytes = max_file_size * 1024 * 1024;
+  const potentialLocalPath = input_text.trim();
+  if (fs.existsSync(potentialLocalPath)) {
+    try {
+      const stats = fs.statSync(potentialLocalPath);
+      if (stats.isDirectory()) {
+        let walkLocalDir = function(currentDir) {
+          const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".venv") continue;
+            const full = path.join(currentDir, entry.name);
+            const rel = path.relative(localRoot, full).replace(/\\/g, "/");
+            if (entry.isDirectory()) {
+              walkLocalDir(full);
+            } else if (entry.isFile()) {
+              if (!isPathAllowed(rel)) continue;
+              try {
+                const stat = fs.statSync(full);
+                if (stat.size <= maxBytes) {
+                  collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
+                }
+              } catch {
+              }
+            }
+          }
+        };
+        const localRoot = path.resolve(potentialLocalPath);
+        const collectedFiles = [];
+        walkLocalDir(localRoot);
+        const paths = collectedFiles.map((f) => f.relPath);
+        const treeText = buildAsciiTree(path.basename(localRoot), paths);
+        const fileContents = [];
+        let totalChars = 0;
+        for (const file of collectedFiles) {
+          try {
+            const buf = fs.readFileSync(file.fullPath);
+            let content;
+            let fileHeader = file.relPath;
+            if (file.relPath.toLowerCase().endsWith(".class")) {
+              if (decompile_classes) {
+                content = decompileJavaClass(buf, path.basename(file.relPath, ".class"));
+                fileHeader += " [Decompiled Java]";
+              } else {
+                content = "[Binary file: Java Class file]";
+              }
+            } else if (isBinaryBuffer(buf)) {
+              content = "[Binary file]";
+            } else {
+              content = buf.toString("utf-8");
+            }
+            totalChars += content.length;
+            fileContents.push(
+              `================================================
+File: ${fileHeader}
+================================================
+${content}
+`
+            );
+          } catch {
+          }
+        }
+        const estimatedTokens = formatTokenCount(Math.round(totalChars / 4));
+        const summary = [
+          `Local Directory: ${localRoot}`,
+          `Files analyzed: ${fileContents.length}`,
+          `Estimated tokens: ${estimatedTokens}`,
+          `Total characters: ${totalChars.toLocaleString()}`
+        ].join("\n");
+        return res.json({
+          summary,
+          tree: `Directory structure:
+${treeText}`,
+          content: fileContents.join("\n"),
+          repo_name: path.basename(localRoot),
+          files_analyzed: fileContents.length,
+          estimated_tokens: estimatedTokens,
+          total_chars: totalChars,
+          mode_info: "Local Directory (Offline, 0 Network Calls)"
+        });
+      }
+    } catch (err) {
+      console.error("Local directory read error:", err);
+    }
+  }
   let clean = input_text.trim();
-  clean = clean.replace(/^https?:\/\//i, "");
-  clean = clean.replace(/^(?:www\.)?(?:github\.com|gitingest\.com)\//i, "");
+  let isSshUrl = false;
+  if (/^git@github\.com:/i.test(clean)) {
+    isSshUrl = true;
+    clean = clean.replace(/^git@github\.com:/i, "");
+  } else {
+    clean = clean.replace(/^https?:\/\//i, "");
+    clean = clean.replace(/^(?:www\.)?(?:github\.com|gitingest\.com)\//i, "");
+  }
   clean = clean.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
   const parts = clean.split("/");
   if (parts.length < 2) {
@@ -357,21 +966,7 @@ app.post("/api/ingest", async (req, res) => {
       abortController.abort();
     }
   });
-  const patterns = pattern.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
-  const compiledPatterns = patterns.map((pat) => {
-    const escaped = pat.replace(/\./g, "\\.").replace(/\*/g, ".*");
-    try {
-      return { regex: new RegExp(escaped, "i"), raw: pat };
-    } catch {
-      return { regex: null, raw: pat };
-    }
-  });
-  const isPathAllowed = (relPath) => {
-    if (compiledPatterns.length === 0) return true;
-    const matched = compiledPatterns.some(({ regex, raw }) => regex ? regex.test(relPath) : relPath.includes(raw));
-    return pattern_type === "include" ? matched : !matched;
-  };
-  const maxBytes = max_file_size * 1024 * 1024;
+  let wasRateLimited = false;
   try {
     let resolvedBranch = branch || "";
     let zipRes;
@@ -384,6 +979,9 @@ app.post("/api/ingest", async (req, res) => {
         headers: zipHeaders,
         signal: abortController.signal
       });
+      if (zipRes && (zipRes.status === 403 || zipRes.status === 429)) {
+        wasRateLimited = true;
+      }
     } else {
       const repoHeaders = {
         Accept: "application/vnd.github.v3+json",
@@ -400,6 +998,9 @@ app.post("/api/ingest", async (req, res) => {
           signal: abortController.signal
         }).catch(() => null)
       ]);
+      if (repoMetaRes.status === 403 || repoMetaRes.status === 429) {
+        wasRateLimited = true;
+      }
       if (repoMetaRes.ok) {
         const repoMetaData = await repoMetaRes.json();
         resolvedBranch = repoMetaData.default_branch || "main";
@@ -413,6 +1014,9 @@ app.post("/api/ingest", async (req, res) => {
           headers: zipHeaders,
           signal: abortController.signal
         });
+        if (zipRes && (zipRes.status === 403 || zipRes.status === 429)) {
+          wasRateLimited = true;
+        }
       }
     }
     if (zipRes && zipRes.ok) {
@@ -430,7 +1034,6 @@ app.post("/api/ingest", async (req, res) => {
           const relPath = rootPrefix && rawPath.startsWith(rootPrefix) ? rawPath.substring(rootPrefix.length) : rawPath;
           if (!relPath || relPath.startsWith(".git/")) continue;
           if (subpath && !relPath.startsWith(subpath)) continue;
-          if (isBinaryExtension(relPath)) continue;
           if (!isPathAllowed(relPath)) continue;
           allPaths.push(relPath);
           fileEntries.push({ relPath, obj });
@@ -451,9 +1054,26 @@ app.post("/api/ingest", async (req, res) => {
           const chunkResults = await Promise.all(
             chunk.map(async ({ relPath, obj }) => {
               try {
-                const content = await obj.async("string");
-                if (content.length > maxBytes || content.includes("\0")) return null;
-                return { relPath, content, len: content.length };
+                let content;
+                let fileHeader = relPath;
+                if (relPath.toLowerCase().endsWith(".class")) {
+                  const buf = await obj.async("nodebuffer");
+                  if (decompile_classes) {
+                    content = decompileJavaClass(buf, path.basename(relPath, ".class"));
+                    fileHeader += " [Decompiled Java]";
+                  } else {
+                    content = "[Binary file: Java Class file]";
+                  }
+                } else {
+                  const buf = await obj.async("nodebuffer");
+                  if (buf.length > maxBytes) return null;
+                  if (isBinaryBuffer(buf)) {
+                    content = "[Binary file]";
+                  } else {
+                    content = buf.toString("utf-8");
+                  }
+                }
+                return { relPath: fileHeader, content, len: content.length };
               } catch {
                 return null;
               }
@@ -508,7 +1128,7 @@ ${treeText}`,
   }
   const tempDir = path.join(os.tmpdir(), `gitingest_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
   try {
-    const cloneUrl = activeToken ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
+    const cloneUrl = isSshUrl ? `git@github.com:${owner}/${repo}.git` : activeToken ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
     const cloneArgs = [
       "clone",
       "--depth",
@@ -580,7 +1200,6 @@ ${treeText}`,
       const { stdout: lsOut } = await execFileAsync("git", ["-C", targetRoot, "ls-files", "-z"], { timeout: 15e3 });
       const rawPaths = lsOut.split("\0").filter(Boolean);
       for (const rel of rawPaths) {
-        if (isBinaryExtension(rel)) continue;
         if (!isPathAllowed(rel)) continue;
         const full = path.join(targetRoot, rel);
         try {
@@ -606,7 +1225,6 @@ ${treeText}`,
             if (entry.isDirectory()) {
               await walkDirFast(full);
             } else if (entry.isFile()) {
-              if (isBinaryExtension(rel)) return;
               if (!isPathAllowed(rel)) return;
               try {
                 const stat = await fsPromises.stat(full);
@@ -639,16 +1257,22 @@ ${treeText}`,
         chunk.map(async (file) => {
           try {
             const buf = await fsPromises.readFile(file.fullPath);
-            if (isBinaryBuffer(buf)) {
-              return {
-                relPath: file.relPath,
-                content: "[Binary file]",
-                length: 13
-              };
+            let content;
+            let fileHeader = file.relPath;
+            if (file.relPath.toLowerCase().endsWith(".class")) {
+              if (decompile_classes) {
+                content = decompileJavaClass(buf, path.basename(file.relPath, ".class"));
+                fileHeader += " [Decompiled Java]";
+              } else {
+                content = "[Binary file: Java Class file]";
+              }
+            } else if (isBinaryBuffer(buf)) {
+              content = "[Binary file]";
+            } else {
+              content = buf.toString("utf-8");
             }
-            const content = buf.toString("utf-8");
             return {
-              relPath: file.relPath,
+              relPath: fileHeader,
               content,
               length: content.length
             };
@@ -699,7 +1323,9 @@ ${treeText}`,
       repo_name: `${owner}/${repo}`,
       files_analyzed: fileContents.length,
       estimated_tokens: estimatedTokens,
-      total_chars: totalChars
+      total_chars: totalChars,
+      mode_switched: wasRateLimited,
+      mode_info: wasRateLimited ? "Switched to Native Git CLI (Rate-limit bypassed)" : isSshUrl ? "Native Git CLI (SSH)" : void 0
     });
   } catch (err) {
     if (clientDisconnected) return;
