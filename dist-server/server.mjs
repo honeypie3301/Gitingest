@@ -646,7 +646,23 @@ function formatJavaSource(info) {
 // server.ts
 import { createServer as createViteServer } from "vite";
 dotenv.config();
-var execFileAsync = promisify(execFile);
+var rawExecFileAsync = promisify(execFile);
+var execFileAsync = async (file, args, options = {}) => {
+  const result = await rawExecFileAsync(file, args, {
+    windowsHide: true,
+    encoding: "utf8",
+    ...options,
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      ...options.env || {}
+    }
+  });
+  return {
+    stdout: typeof result.stdout === "string" ? result.stdout : result.stdout?.toString("utf8") || "",
+    stderr: typeof result.stderr === "string" ? result.stderr : result.stderr?.toString("utf8") || ""
+  };
+};
 var fsPromises = fs.promises;
 var app = express();
 var PORT = process.env.PORT || 3e3;
@@ -1135,7 +1151,11 @@ ${treeText}`,
       "--depth",
       "1",
       "--single-branch",
-      "--no-tags"
+      "--no-tags",
+      "-c",
+      "core.packedGitLimit=128m",
+      "-c",
+      "core.deltaBaseCacheLimit=128m"
     ];
     if (subpath) {
       cloneArgs.push("--filter=blob:none", "--no-checkout", "--sparse");
@@ -1153,7 +1173,17 @@ ${treeText}`,
           error: `Could not access repository "${owner}/${repo}". If this is a private repository, please ensure your GitHub Personal Access Token is configured with 'repo' scope.`
         });
       }
-      const fallbackArgs = ["clone", "--depth", "1", "--single-branch", "--no-tags"];
+      const fallbackArgs = [
+        "clone",
+        "--depth",
+        "1",
+        "--single-branch",
+        "--no-tags",
+        "-c",
+        "core.packedGitLimit=128m",
+        "-c",
+        "core.deltaBaseCacheLimit=128m"
+      ];
       if (branch) fallbackArgs.push("-b", branch);
       fallbackArgs.push(cloneUrl, tempDir);
       await execFileAsync("git", fallbackArgs, { timeout: 3e5 });

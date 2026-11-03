@@ -12,7 +12,23 @@ import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
-const execFileAsync = promisify(execFile);
+const rawExecFileAsync = promisify(execFile);
+const execFileAsync = async (file: string, args: string[], options: any = {}): Promise<{ stdout: string; stderr: string }> => {
+  const result: any = await rawExecFileAsync(file, args, {
+    windowsHide: true,
+    encoding: 'utf8',
+    ...options,
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      ...(options.env || {}),
+    },
+  });
+  return {
+    stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout?.toString('utf8') || '',
+    stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr?.toString('utf8') || '',
+  };
+};
 const fsPromises = fs.promises;
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -611,6 +627,8 @@ app.post('/api/ingest', async (req, res) => {
       '--depth', '1',
       '--single-branch',
       '--no-tags',
+      '-c', 'core.packedGitLimit=128m',
+      '-c', 'core.deltaBaseCacheLimit=128m',
     ];
     if (subpath) {
       cloneArgs.push('--filter=blob:none', '--no-checkout', '--sparse');
@@ -632,7 +650,14 @@ app.post('/api/ingest', async (req, res) => {
       }
 
       // Fallback: if server rejects options, retry standard minimal shallow clone
-      const fallbackArgs = ['clone', '--depth', '1', '--single-branch', '--no-tags'];
+      const fallbackArgs = [
+        'clone',
+        '--depth', '1',
+        '--single-branch',
+        '--no-tags',
+        '-c', 'core.packedGitLimit=128m',
+        '-c', 'core.deltaBaseCacheLimit=128m',
+      ];
       if (branch) fallbackArgs.push('-b', branch);
       fallbackArgs.push(cloneUrl, tempDir);
       await execFileAsync('git', fallbackArgs, { timeout: 300000 });

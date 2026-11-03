@@ -1,8 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Copy, Check, Download, FolderTree, BarChart3, Hash, Cpu, HardDrive, XCircle, Timer } from 'lucide-react';
+import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer, AlertCircle } from 'lucide-react';
 import { IngestResponse } from '../types';
 import { IngestionTimer, formatDuration } from './IngestionTimer';
 import { artifactUrl, fullDigestSection } from '../services/digestExport';
+
+// Threshold above which we avoid mounting a single giant string into a DOM textarea to prevent tab crashes
+const MAX_PREVIEW_CHARS = 200_000; // ~200k chars for preview (~50k tokens)
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -57,7 +60,17 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
     return `${result.summary}\nFile size: ${formattedSize}`;
   }, [result?.summary, estimatedBytes]);
 
-  const handleCopy = async (sectionName: 'all' | 'tree') => {
+  const isHugeContent = useMemo(() => {
+    return Boolean(result?.content_preview_truncated || (result?.content && result.content.length > MAX_PREVIEW_CHARS));
+  }, [result?.content, result?.content_preview_truncated]);
+
+  const displayedContent = useMemo(() => {
+    if (!result?.content) return '';
+    if (!isHugeContent) return result.content;
+    return `${result.content.slice(0, MAX_PREVIEW_CHARS)}\n\n--- [PREVIEW TRUNCATED TO PREVENT BROWSER FREEZE: Remaining ${((result.content_chars ?? result.content.length) - MAX_PREVIEW_CHARS).toLocaleString()} characters omitted from preview. Use 'Copy Digest' or 'Download' to get the full file] ---`;
+  }, [result?.content, result?.content_chars, isHugeContent]);
+
+  const handleCopy = async (sectionName: 'all' | 'tree' | 'content') => {
     if (!result) return;
     try {
       await navigator.clipboard.writeText(await fullDigestSection(result, sectionName));
@@ -166,20 +179,12 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
     <div className="w-full max-w-6xl 2xl:max-w-7xl mx-auto mt-8 px-2 sm:px-4 space-y-6">
       {actionError && <p role="alert" className="text-red-300">{actionError}</p>}
       {/* Quick Metrics Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#161b22] border-2 border-[#30363d] rounded-xl p-3 flex items-center gap-2.5 shadow-[2px_2px_0_0_#000000]">
           <BarChart3 className="w-5 h-5 text-amber-400 shrink-0" />
           <div className="min-w-0">
             <div className="text-[10px] uppercase font-bold text-gray-400">Files Analyzed</div>
             <div className="text-base font-extrabold text-white truncate">{result.files_analyzed ?? '0'}</div>
-          </div>
-        </div>
-
-        <div className="bg-[#161b22] border-2 border-[#30363d] rounded-xl p-3 flex items-center gap-2.5 shadow-[2px_2px_0_0_#000000]">
-          <HardDrive className="w-5 h-5 text-purple-400 shrink-0" />
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase font-bold text-gray-400">File Size</div>
-            <div className="text-base font-extrabold text-white truncate">{formatBytes(estimatedBytes)}</div>
           </div>
         </div>
 
@@ -201,7 +206,7 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 col-span-2 sm:col-span-1">
+        <div className="flex items-center gap-2">
           <button
             onClick={() => handleCopy('all')}
             className="flex-1 h-full py-2.5 px-3 bg-amber-500 hover:bg-amber-400 border-2 border-amber-600 text-gray-950 font-extrabold rounded-xl text-xs sm:text-sm transition-transform active:translate-y-0.5 shadow-[2px_2px_0_0_#000000] flex items-center justify-center gap-1.5 cursor-pointer"
@@ -230,7 +235,17 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
         </div>
       </div>
 
-      {result.mode_info && (
+      {result.mode_switched && (
+        <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-xl px-4 py-3 text-xs font-mono text-amber-300 shadow-[2px_2px_0_0_#000000] flex items-center gap-2.5">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+          <div className="flex-1">
+            <span className="font-bold text-amber-400 uppercase tracking-wide mr-2">Rate-Limit Fallback Active:</span>
+            <span>GitHub API rate limit was encountered. Switched to offline Native Git CLI to complete your ingestion without interruption.</span>
+          </div>
+        </div>
+      )}
+
+      {result.mode_info && !result.mode_switched && (
         <div className="bg-[#161b22] border-2 border-[#30363d] rounded-xl px-4 py-2.5 text-xs font-mono text-amber-400 shadow-[2px_2px_0_0_#000000] flex items-center justify-between">
           <span className="font-bold uppercase tracking-wider text-gray-400">Mode:</span>
           <span className="font-semibold text-amber-300">{result.mode_info}</span>
@@ -300,6 +315,48 @@ export const ResultSection: React.FC<ResultSectionProps> = ({
                   {result.tree_preview_truncated && '\n[Tree preview limited. Copy Tree or Download includes the complete tree.]'}
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Files Content Section */}
+          <div className="pt-2 flex flex-col">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-400" />
+                <span>Files Content</span>
+                {isHugeContent && (
+                  <span className="text-xs font-mono font-bold text-amber-400 bg-amber-950/40 border border-amber-600/50 px-2 py-0.5 rounded">
+                    Large Digest ({(((result.content_chars ?? result.content?.length) || 0) / (1024 * 1024)).toFixed(1)}MB)
+                  </span>
+                )}
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCopy('content')}
+                  className="px-3 py-1 bg-[#21262d] hover:bg-[#30363d] border-[2px] border-[#30363d] text-amber-400 font-bold rounded text-xs transition-transform shadow-[1px_1px_0_0_#000000] flex items-center gap-1.5 cursor-pointer"
+                >
+                  {copiedSection === 'content' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy Content</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="relative">
+              <div className="w-full h-full rounded bg-black translate-y-1 translate-x-1 absolute inset-0"></div>
+              <textarea
+                value={displayedContent}
+                readOnly
+                className="w-full h-[55vh] min-h-[350px] p-4 bg-[#0d1117] border-[3px] border-[#30363d] rounded font-mono text-xs sm:text-sm resize-none focus:outline-none relative z-10 text-gray-200 leading-relaxed"
+              />
             </div>
           </div>
         </div>
