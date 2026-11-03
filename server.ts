@@ -149,6 +149,37 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
 
     // Fallback for fine-grained PATs without user profile permissions
     if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
+      // 1. Dynamically inspect accessible repositories using the PAT
+      try {
+        const userReposRes = await fetch('https://api.github.com/user/repos?per_page=10&affiliation=owner&sort=updated', {
+          headers: {
+            Authorization: `Bearer ${clean}`,
+            Accept: 'application/vnd.github.v3+json',
+            'User-Agent': 'GitIngest-OwnerAuth',
+          },
+        });
+        if (userReposRes.ok) {
+          const repos = await userReposRes.json();
+          if (Array.isArray(repos) && repos.length > 0) {
+            const matchedRepo = repos.find((r: any) => r.owner && (!OWNER_GITHUB_LOGIN || r.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN)) || repos[0];
+            if (matchedRepo?.owner) {
+              const user = {
+                id: matchedRepo.owner.id,
+                login: matchedRepo.owner.login,
+                avatar_url: matchedRepo.owner.avatar_url || '',
+                name: matchedRepo.owner.login,
+                html_url: matchedRepo.owner.html_url,
+              };
+              tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+              return { authorized: true, user };
+            }
+          }
+        }
+      } catch {
+        // Fallback to candidate list
+      }
+
+      // 2. Candidate repo fallback
       const candidateRepos = Array.from(new Set([OWNER_REPO_NAME, 'Personal-Gitingest', 'Gitingest', 'gitingest']));
       for (const repoName of candidateRepos) {
         try {
@@ -189,7 +220,7 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
           if (parsed.message.includes('Bad credentials')) {
             errMsg += ' — please check that the token is active and was copied completely.';
           } else if (parsed.message.includes('Resource not accessible')) {
-            errMsg += ` — if using a Fine-Grained PAT, ensure repository access is granted to ${OWNER_GITHUB_LOGIN}/Personal-Gitingest.`;
+            errMsg += ` — if using a Fine-Grained PAT, ensure repository access is granted in GitHub PAT settings.`;
           }
         }
       } catch {

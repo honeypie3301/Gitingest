@@ -64,7 +64,7 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
   const loadDynamicRepos = async () => {
     setIsLoadingRepos(true);
     const token = getSavedToken();
-    const repos = await fetchUserRepos(token || undefined, 'honeypie3301');
+    const repos = await fetchUserRepos(token || undefined, tokenStatus.user?.login || 'honeypie3301');
     setUserRepos(repos);
     setIsLoadingRepos(false);
   };

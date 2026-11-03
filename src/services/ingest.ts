@@ -184,7 +184,7 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
 
   return {
     success: false,
-    error: `Unable to verify token. If using a Fine-Grained PAT, ensure repository access is granted to "${OWNER_GITHUB_LOGIN}/Personal-Gitingest", or unlock using your Secret Access Key.`,
+    error: `Unable to verify token. If using a Fine-Grained PAT, ensure repository access is granted in GitHub PAT settings, or unlock using your Secret Access Key.`,
   };
 }
 

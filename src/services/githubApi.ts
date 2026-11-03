@@ -37,6 +37,28 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
     }
 
     if (!res.ok && (res.status === 403 || res.status === 404)) {
+      try {
+        const userReposRes = await fetch('https://api.github.com/user/repos?per_page=10&affiliation=owner&sort=updated', {
+          headers: {
+            Authorization: primaryAuth,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        });
+        if (userReposRes.ok) {
+          const repos = await userReposRes.json();
+          if (Array.isArray(repos) && repos.length > 0 && repos[0]?.owner) {
+            const owner = repos[0].owner;
+            return {
+              id: owner.id,
+              login: owner.login,
+              avatar_url: owner.avatar_url || '',
+              name: owner.login,
+              html_url: owner.html_url,
+            };
+          }
+        }
+      } catch {}
+
       const candidateRepos = ['Personal-Gitingest', 'Gitingest', 'gitingest'];
       for (const repoName of candidateRepos) {
         try {

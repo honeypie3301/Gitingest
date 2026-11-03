@@ -443,29 +443,9 @@ export default function App() {
               G
             </div>
             <span className="text-sm font-extrabold text-white">GitIngest Personal</span>
-            <span className="text-xs text-gray-400">| Multi-Ingest Workspace (Max {MAX_WORKFLOWS})</span>
           </div>
 
           <div className="flex items-center gap-4 text-xs font-bold text-gray-400">
-            {!isLocked && (
-              <button
-                onClick={handleManualLock}
-                className="hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer text-amber-400/90"
-                title="Lock this session"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>Lock Session</span>
-              </button>
-            )}
-
-            <button
-              onClick={() => setIsTokenModalOpen(true)}
-              className="hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer"
-            >
-              <Lock className="w-3.5 h-3.5" />
-              <span>PAT & Owner Lock</span>
-            </button>
-            <span>•</span>
             <a
               href="https://github.com/honeypie3301/Personal-Gitingest"
               target="_blank"
@@ -473,6 +453,15 @@ export default function App() {
               className="hover:text-amber-400 transition-colors"
             >
               Source Repo
+            </a>
+            <span>•</span>
+            <a
+              href="https://github.com/coderamp-labs/gitingest"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-amber-400 transition-colors"
+            >
+              original gitingest
             </a>
           </div>
         </div>

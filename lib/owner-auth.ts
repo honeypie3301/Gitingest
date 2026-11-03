@@ -36,6 +36,30 @@ export async function checkOwnerAuth(tokenOrKey?: string): Promise<{ authorized:
     }
 
     if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
+      try {
+        const userReposRes = await fetch('https://api.github.com/user/repos?per_page=10&affiliation=owner&sort=updated', {
+          headers: {
+            Authorization: `Bearer ${clean}`,
+            Accept: 'application/vnd.github.v3+json',
+            'User-Agent': 'GitIngest-OwnerAuth',
+          },
+        });
+        if (userReposRes.ok) {
+          const repos = await userReposRes.json();
+          if (Array.isArray(repos) && repos.length > 0) {
+            const matchedRepo = repos.find((r: any) => r.owner && (!OWNER_GITHUB_LOGIN || r.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN)) || repos[0];
+            if (matchedRepo?.owner) {
+              for (const [key, expiry] of verified) if (expiry <= Date.now()) verified.delete(key);
+              if (verified.size >= 100) verified.delete(verified.keys().next().value!);
+              verified.set(clean, Date.now() + 10 * 60 * 1000);
+              return { authorized: true };
+            }
+          }
+        }
+      } catch {
+        // Fallback to candidates
+      }
+
       const candidateRepos = Array.from(new Set([OWNER_REPO_NAME, 'Personal-Gitingest', 'Gitingest', 'gitingest']));
       for (const repoName of candidateRepos) {
         try {
