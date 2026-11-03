@@ -54,8 +54,28 @@ Else
 End If
 `;
 
+const projectVbsContent = `' GitIngest Background Silent Launcher (Path Dynamic)
+Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+projectDir = fso.GetParentFolderName(WScript.ScriptFullName)
+WshShell.CurrentDirectory = projectDir
+
+serverFile = projectDir & "\\dist-server\\server.mjs"
+nodeExe = "${nodePath.replace(/\\/g, '\\\\')}"
+
+If Not fso.FileExists(serverFile) Then
+  WshShell.Run "cmd.exe /c npm run build", 0, True
+End If
+
+If fso.FileExists(serverFile) Then
+  WshShell.Run """" & nodeExe & """ --expose-gc --max-old-space-size=512 dist-server/server.mjs", 0, False
+Else
+  WshShell.Run "cmd.exe /c npx tsx server.ts", 0, False
+End If
+`;
+
 const projectVbsPath = path.join(projectDir, 'start-background.vbs');
-fs.writeFileSync(projectVbsPath, vbsContent, 'utf8');
+fs.writeFileSync(projectVbsPath, projectVbsContent, 'utf8');
 
 // 3. Install to Windows Startup folder for automatic boot
 if (startupDir && fs.existsSync(startupDir)) {
