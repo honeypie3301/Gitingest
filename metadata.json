@@ -1,5 +1,5 @@
 {
-  "name": "GitIngest",
+  "name": "Personal GitIngest",
   "description": "CLI and web tool to analyze and create text dumps of codebases for LLMs",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

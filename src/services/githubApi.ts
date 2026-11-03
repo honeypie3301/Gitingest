@@ -35,22 +35,29 @@ export async function verifyGitHubToken(token: string): Promise<GitHubUser | nul
     }
 
     if (!res.ok && (res.status === 403 || res.status === 404)) {
-      const repoRes = await fetch('https://api.github.com/repos/honeypie3301/Personal-Gitingest', {
-        headers: {
-          Authorization: `Bearer ${clean}`,
-          Accept: 'application/vnd.github.v3+json',
-        },
-      });
-      if (repoRes.ok) {
-        const repoData = await repoRes.json();
-        if (repoData.owner) {
-          return {
-            id: repoData.owner.id,
-            login: repoData.owner.login,
-            avatar_url: repoData.owner.avatar_url,
-            name: repoData.owner.login,
-            html_url: repoData.owner.html_url,
-          };
+      const candidateRepos = ['Personal-Gitingest', 'Gitingest', 'gitingest'];
+      for (const repoName of candidateRepos) {
+        try {
+          const repoRes = await fetch(`https://api.github.com/repos/honeypie3301/${repoName}`, {
+            headers: {
+              Authorization: `Bearer ${clean}`,
+              Accept: 'application/vnd.github.v3+json',
+            },
+          });
+          if (repoRes.ok) {
+            const repoData = await repoRes.json();
+            if (repoData.owner) {
+              return {
+                id: repoData.owner.id,
+                login: repoData.owner.login,
+                avatar_url: repoData.owner.avatar_url,
+                name: repoData.owner.login,
+                html_url: repoData.owner.html_url,
+              };
+            }
+          }
+        } catch {
+          // try next candidate repo
         }
       }
     }

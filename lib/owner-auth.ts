@@ -4,6 +4,8 @@ const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').to
 const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
 const OWNER_ACCESS_KEY = (process.env.OWNER_ACCESS_KEY || process.env.OWNER_PASSPHRASE || 'honeypie3301-84184414').trim();
 
+const OWNER_REPO_NAME = (process.env.OWNER_REPO_NAME || 'Personal-Gitingest').trim();
+
 // Process-local and credential-specific. Polling a job must not make /user requests every 1.5 seconds.
 const verified = new Map<string, number>();
 export async function checkOwnerAuth(tokenOrKey?: string): Promise<{ authorized: boolean; reason?: string; status?: number }> {
@@ -16,13 +18,49 @@ export async function checkOwnerAuth(tokenOrKey?: string): Promise<{ authorized:
   }
   if ((verified.get(clean) || 0) > Date.now()) return { authorized: true };
   try {
-    const ghRes = await fetch('https://api.github.com/user', {
+    let ghRes = await fetch('https://api.github.com/user', {
       headers: {
-        Authorization: `Bearer ${clean}`,
+        Authorization: `token ${clean}`,
         Accept: 'application/vnd.github.v3+json',
         'User-Agent': 'GitIngest-OwnerAuth',
       },
     });
+    if (!ghRes.ok && ghRes.status === 401) {
+      ghRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'GitIngest-OwnerAuth',
+        },
+      });
+    }
+
+    if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
+      const candidateRepos = Array.from(new Set([OWNER_REPO_NAME, 'Personal-Gitingest', 'Gitingest', 'gitingest']));
+      for (const repoName of candidateRepos) {
+        try {
+          const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/${repoName}`, {
+            headers: {
+              Authorization: `Bearer ${clean}`,
+              Accept: 'application/vnd.github.v3+json',
+              'User-Agent': 'GitIngest-OwnerAuth',
+            },
+          });
+          if (repoCheck.ok) {
+            const repoData = await repoCheck.json();
+            if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+              for (const [key, expiry] of verified) if (expiry <= Date.now()) verified.delete(key);
+              if (verified.size >= 100) verified.delete(verified.keys().next().value!);
+              verified.set(clean, Date.now() + 10 * 60 * 1000);
+              return { authorized: true };
+            }
+          }
+        } catch {
+          // try next repo candidate
+        }
+      }
+    }
+
     if (!ghRes.ok) {
       const rateLimit = await githubRateLimitMessage(ghRes);
       if (rateLimit) return { authorized: false, status: 429, reason: rateLimit };

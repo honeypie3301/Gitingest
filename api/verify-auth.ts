@@ -4,6 +4,8 @@ const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').to
 const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
 const OWNER_ACCESS_KEY = (process.env.OWNER_ACCESS_KEY || process.env.OWNER_PASSPHRASE || 'honeypie3301-84184414').trim();
 
+const OWNER_REPO_NAME = (process.env.OWNER_REPO_NAME || 'Personal-Gitingest').trim();
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -55,26 +57,33 @@ export default async function handler(req: any, res: any) {
     if (rateLimit) return res.status(429).json({ success: false, error: rateLimit });
 
     if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
-      const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/gitingest`, {
-        headers: {
-          Authorization: `Bearer ${clean}`,
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': 'GitIngest-OwnerAuth',
-        },
-      });
-      if (repoCheck.ok) {
-        const repoData = await repoCheck.json();
-        if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
-          return res.json({
-            success: true,
-            user: {
-              id: repoData.owner.id,
-              login: repoData.owner.login,
-              avatar_url: repoData.owner.avatar_url || '',
-              name: repoData.owner.login,
-              html_url: repoData.owner.html_url,
+      const candidateRepos = Array.from(new Set([OWNER_REPO_NAME, 'Personal-Gitingest', 'Gitingest', 'gitingest']));
+      for (const repoName of candidateRepos) {
+        try {
+          const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/${repoName}`, {
+            headers: {
+              Authorization: `Bearer ${clean}`,
+              Accept: 'application/vnd.github.v3+json',
+              'User-Agent': 'GitIngest-OwnerAuth',
             },
           });
+          if (repoCheck.ok) {
+            const repoData = await repoCheck.json();
+            if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+              return res.json({
+                success: true,
+                user: {
+                  id: repoData.owner.id,
+                  login: repoData.owner.login,
+                  avatar_url: repoData.owner.avatar_url || '',
+                  name: repoData.owner.login,
+                  html_url: repoData.owner.html_url,
+                },
+              });
+            }
+          }
+        } catch {
+          // try next repo candidate
         }
       }
     }

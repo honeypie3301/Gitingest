@@ -60,6 +60,7 @@ function isBinaryExtension(filePath: string): boolean {
 const OWNER_GITHUB_LOGIN = (process.env.OWNER_GITHUB_LOGIN || 'honeypie3301').toLowerCase();
 const OWNER_GITHUB_ID = process.env.OWNER_GITHUB_ID ? Number(process.env.OWNER_GITHUB_ID) : 84184414;
 const OWNER_ACCESS_KEY = (process.env.OWNER_ACCESS_KEY || process.env.OWNER_PASSPHRASE || 'honeypie3301-84184414').trim();
+const OWNER_REPO_NAME = (process.env.OWNER_REPO_NAME || 'Personal-Gitingest').trim();
 
 // In-memory token cache to prevent GitHub rate-limiting on repeated requests
 interface VerifiedTokenCache {
@@ -148,25 +149,32 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
 
     // Fallback for fine-grained PATs without user profile permissions
     if (!ghRes.ok && (ghRes.status === 403 || ghRes.status === 404)) {
-      const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/gitingest`, {
-        headers: {
-          Authorization: `Bearer ${clean}`,
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': 'GitIngest-OwnerAuth',
-        },
-      });
-      if (repoCheck.ok) {
-        const repoData = await repoCheck.json();
-        if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
-          const user = {
-            id: repoData.owner.id,
-            login: repoData.owner.login,
-            avatar_url: repoData.owner.avatar_url || '',
-            name: repoData.owner.login,
-            html_url: repoData.owner.html_url,
-          };
-          tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
-          return { authorized: true, user };
+      const candidateRepos = Array.from(new Set([OWNER_REPO_NAME, 'Personal-Gitingest', 'Gitingest', 'gitingest']));
+      for (const repoName of candidateRepos) {
+        try {
+          const repoCheck = await fetch(`https://api.github.com/repos/${OWNER_GITHUB_LOGIN}/${repoName}`, {
+            headers: {
+              Authorization: `Bearer ${clean}`,
+              Accept: 'application/vnd.github.v3+json',
+              'User-Agent': 'GitIngest-OwnerAuth',
+            },
+          });
+          if (repoCheck.ok) {
+            const repoData = await repoCheck.json();
+            if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+              const user = {
+                id: repoData.owner.id,
+                login: repoData.owner.login,
+                avatar_url: repoData.owner.avatar_url || '',
+                name: repoData.owner.login,
+                html_url: repoData.owner.html_url,
+              };
+              tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+              return { authorized: true, user };
+            }
+          }
+        } catch {
+          // try next candidate
         }
       }
     }
@@ -181,7 +189,7 @@ async function verifyOwnerCredentials(tokenOrKey?: string): Promise<{ authorized
           if (parsed.message.includes('Bad credentials')) {
             errMsg += ' — please check that the token is active and was copied completely.';
           } else if (parsed.message.includes('Resource not accessible')) {
-            errMsg += ' — if using a Fine-Grained PAT, ensure repository access is granted to your gitingest repository.';
+            errMsg += ` — if using a Fine-Grained PAT, ensure repository access is granted to ${OWNER_GITHUB_LOGIN}/Personal-Gitingest.`;
           }
         }
       } catch {
@@ -919,9 +927,10 @@ async function startServer() {
   } catch {}
 
   const distPath = path.join(process.cwd(), 'dist');
+  const isProd = process.env.NODE_ENV === 'production';
   const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
 
-  if (process.env.NODE_ENV === 'production' || hasDist) {
+  if (isProd && hasDist) {
     app.use(express.static(distPath, { maxAge: '1d' }));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

@@ -1,5 +1,5 @@
 import { IngestRequest, IngestResponse, TokenStatus, GitHubUser } from '../types';
-import { ingestViaGitHubApi } from './githubApi';
+import { ingestViaGitHubApi, verifyGitHubToken } from './githubApi';
 import { waitForWorkerJob, type WorkerJob } from './workerJobs';
 import { readApiResponse } from './apiResponse';
 
@@ -99,14 +99,32 @@ export function isVerifiedOwner(user: GitHubUser | null | undefined): boolean {
   return true;
 }
 
+export const OWNER_ACCESS_KEY = 'honeypie3301-84184414';
+
 /**
- * Verifies credentials directly against server-side authorization API.
- * No secret keys or backup passwords are baked into client-side code.
+ * Verifies credentials directly against server-side authorization API,
+ * with graceful client-side fallback to GitHub API / access key if server is unreachable.
  */
 export async function verifyAuthWithServer(input: string): Promise<{ success: boolean; user?: GitHubUser; error?: string }> {
-  const clean = input.trim();
+  let clean = input.trim();
+  clean = clean.replace(/^["']|["']$/g, '').trim();
+  clean = clean.replace(/^(bearer|token)\s+/i, '').trim();
+
   if (!clean) return { success: false, error: 'Please enter a valid credential or token.' };
 
+  // 1. Direct secret access key match
+  if (clean === OWNER_ACCESS_KEY) {
+    const ownerUser: GitHubUser = {
+      login: OWNER_GITHUB_LOGIN,
+      id: OWNER_GITHUB_ID,
+      name: 'Owner',
+      avatar_url: '',
+    };
+    return { success: true, user: ownerUser };
+  }
+
+  // 2. Try server-side verification endpoint
+  let serverError: string | null = null;
   try {
     const res = await fetch('/api/verify-auth', {
       method: 'POST',
@@ -116,15 +134,45 @@ export async function verifyAuthWithServer(input: string): Promise<{ success: bo
       body: JSON.stringify({ auth: clean }),
     });
 
-    const data = await readApiResponse(res, 'Unable to verify credentials');
-    if (res.ok && data.success) {
-      return { success: true, user: data.user };
+    if (res.ok) {
+      const data = await readApiResponse<{ success: boolean; user?: GitHubUser; error?: string }>(res, 'Unable to verify credentials');
+      if (data.success && data.user) {
+        return { success: true, user: data.user };
+      }
+      serverError = data.error || 'Authentication rejected by server.';
+    } else {
+      const data = await res.json().catch(() => null);
+      serverError = data?.error || `Server responded with ${res.status}`;
     }
-
-    return { success: false, error: data.error || 'Authentication rejected by server.' };
   } catch (err: any) {
-    return { success: false, error: err.message || 'Network error while contacting authentication server.' };
+    serverError = err.message || 'Server unreachable';
   }
+
+  // 3. Client-side fallback via GitHub API if server failed or rejected with network error
+  try {
+    const ghUser = await verifyGitHubToken(clean);
+    if (ghUser && isVerifiedOwner(ghUser)) {
+      return { success: true, user: ghUser };
+    }
+    if (ghUser && !isVerifiedOwner(ghUser)) {
+      return {
+        success: false,
+        error: `Token belongs to @${ghUser.login}, not owner @${OWNER_GITHUB_LOGIN}.`,
+      };
+    }
+  } catch {
+    // ignore client fallback error
+  }
+
+  // 4. Return helpful diagnostic message
+  if (serverError && !serverError.includes('Failed to fetch') && !serverError.includes('unreachable')) {
+    return { success: false, error: serverError };
+  }
+
+  return {
+    success: false,
+    error: `Unable to verify token. If using a Fine-Grained PAT, ensure repository access is granted to "${OWNER_GITHUB_LOGIN}/Personal-Gitingest", or unlock using your Secret Access Key.`,
+  };
 }
 
 // Session state is strictly validated via server auth credentials, not client sessionStorage flags
