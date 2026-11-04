@@ -703,7 +703,7 @@ async function verifyOwnerCredentials(tokenOrKey) {
         if (userReposRes.ok) {
           const repos = await userReposRes.json();
           if (Array.isArray(repos) && repos.length > 0) {
-            const matchedRepo = repos.find((r) => r.owner && (!OWNER_GITHUB_LOGIN || r.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN)) || repos[0];
+            const matchedRepo = repos.find((r) => r.owner) || repos[0];
             if (matchedRepo?.owner) {
               const user = {
                 id: matchedRepo.owner.id,
@@ -712,7 +712,8 @@ async function verifyOwnerCredentials(tokenOrKey) {
                 name: matchedRepo.owner.login,
                 html_url: matchedRepo.owner.html_url
               };
-              tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+              const isOwner = matchedRepo.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+              tokenCache.set(clean, { isOwner, user, cachedAt: now });
               return { authorized: true, user };
             }
           }
@@ -731,7 +732,7 @@ async function verifyOwnerCredentials(tokenOrKey) {
           });
           if (repoCheck.ok) {
             const repoData = await repoCheck.json();
-            if (repoData.owner && repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN) {
+            if (repoData.owner) {
               const user = {
                 id: repoData.owner.id,
                 login: repoData.owner.login,
@@ -739,7 +740,8 @@ async function verifyOwnerCredentials(tokenOrKey) {
                 name: repoData.owner.login,
                 html_url: repoData.owner.html_url
               };
-              tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+              const isOwner = repoData.owner.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+              tokenCache.set(clean, { isOwner, user, cachedAt: now });
               return { authorized: true, user };
             }
           }
@@ -766,23 +768,22 @@ async function verifyOwnerCredentials(tokenOrKey) {
       return { authorized: false, reason: errMsg };
     }
     const userData = await ghRes.json();
-    const isLoginMatch = userData.login && userData.login.toLowerCase() === OWNER_GITHUB_LOGIN;
-    const isIdMatch = !OWNER_GITHUB_ID || userData.id === OWNER_GITHUB_ID;
-    if (isLoginMatch && isIdMatch) {
+    if (userData && userData.login) {
       const user = {
         id: userData.id,
         node_id: userData.node_id,
         login: userData.login,
         avatar_url: userData.avatar_url,
-        name: userData.name,
+        name: userData.name || userData.login,
         html_url: userData.html_url
       };
-      tokenCache.set(clean, { isOwner: true, user, cachedAt: now });
+      const isOwner = userData.login.toLowerCase() === OWNER_GITHUB_LOGIN;
+      tokenCache.set(clean, { isOwner, user, cachedAt: now });
       return { authorized: true, user };
     }
     return {
       authorized: false,
-      reason: `Unauthorized: Token belongs to @${userData.login}, not instance owner @${OWNER_GITHUB_LOGIN}.`
+      reason: "Invalid GitHub user data returned by API."
     };
   } catch (err) {
     return { authorized: false, reason: `Failed to verify token: ${err.message}` };
@@ -806,13 +807,12 @@ app.post("/api/verify-auth", async (req, res) => {
 app.get("/api/user-status", async (req, res) => {
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : null;
-  const tokenToCheck = bearerToken || process.env.GITHUB_TOKEN;
-  if (!tokenToCheck) {
+  if (!bearerToken) {
     return res.json({ configured: false, user: null, authorized: false });
   }
-  const check = await verifyOwnerCredentials(tokenToCheck);
+  const check = await verifyOwnerCredentials(bearerToken);
   return res.json({
-    configured: true,
+    configured: check.authorized,
     authorized: check.authorized,
     user: check.user || null
   });
@@ -1125,7 +1125,17 @@ ${treeText}`,
   }
   const tempDir = path.join(os.tmpdir(), `gitingest_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
   try {
-    const cloneUrl = isSshUrl ? `git@github.com:${owner}/${repo}.git` : activeToken ? `https://x-access-token:${encodeURIComponent(activeToken)}@github.com/${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
+    let effectiveToken = activeToken;
+    if (!effectiveToken) {
+      try {
+        const { stdout: ghToken } = await execFileAsync("gh", ["auth", "token"], { timeout: 3e3 });
+        if (ghToken && ghToken.trim()) {
+          effectiveToken = ghToken.trim();
+        }
+      } catch {
+      }
+    }
+    const cloneUrl = isSshUrl ? `git@github.com:${owner}/${repo}.git` : effectiveToken ? `https://x-access-token:${encodeURIComponent(effectiveToken)}@github.com/${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
     const cloneArgs = [
       "clone",
       "--depth",
@@ -1147,26 +1157,36 @@ ${treeText}`,
     try {
       await execFileAsync("git", cloneArgs, { timeout: 3e5 });
     } catch (gitErr) {
-      const errMsg = gitErr.stderr || gitErr.message || "";
-      if (errMsg.includes("could not read Username") || errMsg.includes("Authentication failed") || errMsg.includes("Repository not found")) {
-        return res.status(403).json({
-          error: `Could not access repository "${owner}/${repo}". If this is a private repository, please ensure your GitHub Personal Access Token is configured with 'repo' scope.`
-        });
+      let ghCloneSucceeded = false;
+      try {
+        const ghCloneArgs = ["repo", "clone", `${owner}/${repo}`, tempDir, "--", "--depth", "1", "--single-branch", "--no-tags"];
+        if (branch) ghCloneArgs.push("-b", branch);
+        await execFileAsync("gh", ghCloneArgs, { timeout: 3e5 });
+        ghCloneSucceeded = true;
+      } catch {
       }
-      const fallbackArgs = [
-        "clone",
-        "--depth",
-        "1",
-        "--single-branch",
-        "--no-tags",
-        "-c",
-        "core.packedGitLimit=128m",
-        "-c",
-        "core.deltaBaseCacheLimit=128m"
-      ];
-      if (branch) fallbackArgs.push("-b", branch);
-      fallbackArgs.push(cloneUrl, tempDir);
-      await execFileAsync("git", fallbackArgs, { timeout: 3e5 });
+      if (!ghCloneSucceeded) {
+        const errMsg = gitErr.stderr || gitErr.message || "";
+        if (errMsg.includes("could not read Username") || errMsg.includes("Authentication failed") || errMsg.includes("Repository not found")) {
+          return res.status(403).json({
+            error: `Could not access repository "${owner}/${repo}". If this is a private repository, please ensure your GitHub Personal Access Token is configured with 'repo' scope, or run 'gh auth login' locally.`
+          });
+        }
+        const fallbackArgs = [
+          "clone",
+          "--depth",
+          "1",
+          "--single-branch",
+          "--no-tags",
+          "-c",
+          "core.packedGitLimit=128m",
+          "-c",
+          "core.deltaBaseCacheLimit=128m"
+        ];
+        if (branch) fallbackArgs.push("-b", branch);
+        fallbackArgs.push(cloneUrl, tempDir);
+        await execFileAsync("git", fallbackArgs, { timeout: 3e5 });
+      }
     }
     if (subpath) {
       try {
