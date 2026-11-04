@@ -19,7 +19,6 @@ import { fetchUserRepos, RepoSummary } from './services/githubApi';
 import { IngestRequest, IngestResponse, TokenStatus } from './types';
 import { Lock, ShieldCheck, Key, RefreshCw } from 'lucide-react';
 import { notifier } from './services/notifications';
-import { addRecentIngest } from './services/ingestionHistory';
 
 interface WorkflowSession {
   id: string;
@@ -258,10 +257,8 @@ export default function App() {
               return { ...s, isLoading: false, error: data.error, abortController: null, startTime: null };
             }
             const duration = Date.now() - startTime;
-            const repoName = data.repo_name || req.input_text.replace(/^https?:\/\/github\.com\//i, '');
-            addRecentIngest(req.input_text, repoName, data.files_analyzed || 0);
             notifier.notifyIngestionDone(
-              repoName,
+              data.repo_name || req.input_text.replace(/^https?:\/\/github\.com\//i, ''),
               data.files_analyzed || 0,
               duration / 1000
             );

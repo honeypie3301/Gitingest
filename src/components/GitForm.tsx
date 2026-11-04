@@ -1,17 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle, Check, Clock, X } from 'lucide-react';
+import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle, Check } from 'lucide-react';
 import { IngestRequest, PatternType, TokenStatus } from '../types';
 import { getSavedPatterns, savePatterns, getSavedToken, getSavedDecompileClasses, saveDecompileClasses } from '../services/ingest';
 import { fetchUserRepos, RepoSummary } from '../services/githubApi';
 import { IngestionTimer } from './IngestionTimer';
-import {
-  getRecentIngests,
-  addRecentIngest,
-  removeRecentIngest,
-  clearRecentIngests,
-  formatTimeAgo,
-  RecentIngest,
-} from '../services/ingestionHistory';
 
 interface GitFormProps {
   onIngest: (req: IngestRequest) => void;
@@ -54,7 +46,6 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
   const [userRepos, setUserRepos] = useState<RepoSummary[]>([]);
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
   const [decompileClasses, setDecompileClasses] = useState(false);
-  const [recentIngests, setRecentIngests] = useState<RecentIngest[]>([]);
 
   useEffect(() => {
     const saved = getSavedPatterns();
@@ -65,7 +56,6 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
     setDisplaySize(String(savedMb));
     setSizeUnit('MB');
     setDecompileClasses(getSavedDecompileClasses());
-    setRecentIngests(getRecentIngests());
 
     loadDynamicRepos();
   }, [tokenStatus]);
@@ -161,8 +151,6 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
     e.preventDefault();
     if (!url.trim()) return;
     savePatterns(patternType, pattern, maxFileSize);
-    const updated = addRecentIngest(url.trim());
-    setRecentIngests(updated);
     onIngest({
       input_text: url.trim(),
       pattern_type: patternType,
@@ -175,10 +163,7 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
   const handleRepoClick = (repoFullName: string) => {
     const repoUrl = `https://github.com/${repoFullName}`;
     setUrl(repoUrl);
-    onUrlChange?.(repoUrl);
     savePatterns(patternType, pattern, maxFileSize);
-    const updated = addRecentIngest(repoUrl);
-    setRecentIngests(updated);
     onIngest({
       input_text: repoUrl,
       pattern_type: patternType,
@@ -186,32 +171,6 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
       max_file_size: maxFileSize,
       decompile_classes: decompileClasses,
     });
-  };
-
-  const handleRecentClick = (recentUrl: string) => {
-    setUrl(recentUrl);
-    onUrlChange?.(recentUrl);
-    savePatterns(patternType, pattern, maxFileSize);
-    const updated = addRecentIngest(recentUrl);
-    setRecentIngests(updated);
-    onIngest({
-      input_text: recentUrl,
-      pattern_type: patternType,
-      pattern: pattern.trim(),
-      max_file_size: maxFileSize,
-      decompile_classes: decompileClasses,
-    });
-  };
-
-  const handleRemoveRecent = (recentUrl: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const updated = removeRecentIngest(recentUrl);
-    setRecentIngests(updated);
-  };
-
-  const handleClearRecent = () => {
-    const updated = clearRecentIngests();
-    setRecentIngests(updated);
   };
 
   return (
@@ -307,46 +266,6 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
                     <span className="truncate max-w-[140px] sm:max-w-none">{repo.name}</span>
                   </button>
                 ))}
-              </div>
-            )}
-
-            {/* Recent Ingestions History Section */}
-            {recentIngests.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-1 border-t border-[#30363d]/60">
-                <span className="text-[11px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider mr-1 flex items-center gap-1 shrink-0">
-                  <Clock className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Recent:</span>
-                </span>
-
-                {recentIngests.slice(0, 8).map((item) => (
-                  <div key={item.id} className="inline-flex items-center group shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleRecentClick(item.url)}
-                      className="text-[11px] sm:text-xs font-semibold px-2 py-1 bg-[#1c2128] hover:bg-[#2d333b] text-gray-300 hover:text-white rounded-l border border-r-0 border-[#30363d] hover:border-amber-500/60 transition-colors flex items-center gap-1 cursor-pointer"
-                      title={`${item.url} (${formatTimeAgo(item.timestamp)})`}
-                    >
-                      <span className="truncate max-w-[130px] sm:max-w-[180px]">{item.repoName}</span>
-                      <span className="text-[10px] text-gray-400 font-mono">({formatTimeAgo(item.timestamp)})</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => handleRemoveRecent(item.url, e)}
-                      className="px-1.5 py-1 bg-[#1c2128] hover:bg-red-950/80 text-gray-400 hover:text-red-400 rounded-r border border-l-0 border-[#30363d] hover:border-red-600/80 transition-colors cursor-pointer"
-                      title="Remove from history"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-
-                <button
-                  type="button"
-                  onClick={handleClearRecent}
-                  className="text-[10px] font-bold text-gray-400 hover:text-amber-400 transition-colors ml-auto shrink-0 cursor-pointer"
-                >
-                  Clear history
-                </button>
               </div>
             )}
 
