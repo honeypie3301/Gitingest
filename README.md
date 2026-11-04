@@ -33,8 +33,3 @@ A high-performance codebase ingestion tool designed to convert any Git repositor
    ```
 
 3. Open your browser and navigate to `http://localhost:3000`.
-
-## License
-
-Apache-2.0
-
