@@ -17,18 +17,12 @@ DEFAULT_IGNORE_PATTERNS: set[str] = {
     ".mypy_cache",
     ".ruff_cache",
     ".hypothesis",
-    "poetry.lock",
-    "Pipfile.lock",
     # JavaScript/FileSystemNode
     "node_modules",
     "bower_components",
-    "package-lock.json",
-    "yarn.lock",
     ".npm",
     ".yarn",
     ".pnpm-store",
-    "bun.lock",
-    "bun.lockb",
     # Java
     "*.class",
     "*.jar",
@@ -53,8 +47,6 @@ DEFAULT_IGNORE_PATTERNS: set[str] = {
     "*.out",
     "*.a",
     "*.pdb",
-    # Binary
-    "*.bin",
     # Swift/Xcode
     ".build/",
     "*.xcodeproj/",
@@ -70,12 +62,10 @@ DEFAULT_IGNORE_PATTERNS: set[str] = {
     "*.gem",
     ".bundle/",
     "vendor/bundle",
-    "Gemfile.lock",
     ".ruby-version",
     ".ruby-gemset",
     ".rvmrc",
     # Rust
-    "Cargo.lock",
     "**/*.rs.bk",
     # Java / Rust
     "target/",

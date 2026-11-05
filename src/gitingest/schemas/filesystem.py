@@ -8,7 +8,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 from gitingest.utils.compat_func import readlink
-from gitingest.utils.file_utils import _decodes, _get_preferred_encodings, _read_chunk
+from gitingest.utils.file_utils import _decodes, _get_preferred_encodings, _read_chunk, format_binary_content
 from gitingest.utils.notebook import process_notebook
 
 if TYPE_CHECKING:
@@ -142,17 +142,20 @@ class FileSystemNode:  # pylint: disable=too-many-instance-attributes
         if chunk == b"":
             return "[Empty file]"
 
-        if not _decodes(chunk, "utf-8"):
-            return "[Binary file]"
-
-        # Find the first encoding that decodes the sample
-        good_enc: str | None = next(
-            (enc for enc in _get_preferred_encodings() if _decodes(chunk, encoding=enc)),
-            None,
-        )
+        # If not clean UTF-8, check if any other supported text encoding decodes it
+        good_enc: str | None = None
+        if _decodes(chunk, "utf-8"):
+            good_enc = "utf-8"
+        else:
+            good_enc = next(
+                (enc for enc in _get_preferred_encodings() if _decodes(chunk, encoding=enc)),
+                None,
+            )
 
         if good_enc is None:
-            return "Error: Unable to decode file with available encodings"
+            # File is a binary file (e.g. .bin, .dat, compiled formats).
+            # Format it cleanly as a structured hex dump preview instead of dumping scrambled bytes.
+            return format_binary_content(self.path)
 
         try:
             with self.path.open(encoding=good_enc) as fp:
