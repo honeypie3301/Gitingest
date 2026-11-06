@@ -8,6 +8,7 @@ const AUTO_INJECT_KEY = 'gitingest_auto_inject_pat';
 const PATTERN_TYPE_KEY = 'gitingest_pattern_type';
 const PATTERN_VALUE_KEY = 'gitingest_pattern_val';
 const MAX_FILE_SIZE_KEY = 'gitingest_max_file_size';
+const MAX_OUTPUT_SIZE_KEY = 'gitingest_max_output_size';
 const DECOMPILE_CLASSES_KEY = 'gitingest_decompile_classes';
 const OWNER_PIN_KEY = 'gitingest_owner_pin';
 
@@ -64,25 +65,47 @@ export function setAutoInjectToken(enabled: boolean): void {
   }
 }
 
-export function getSavedPatterns(): { type: 'exclude' | 'include'; pattern: string; maxFileSize: number } {
+export function getSavedPatterns(): { type: 'exclude' | 'include'; pattern: string; maxFileSize: number; maxOutputSize: number } {
   try {
     const type = (localStorage.getItem(PATTERN_TYPE_KEY) as 'exclude' | 'include') || 'exclude';
     const pattern = localStorage.getItem(PATTERN_VALUE_KEY) ?? '*.md, tests/, docs/';
     const sizeStr = localStorage.getItem(MAX_FILE_SIZE_KEY);
     const maxFileSize = sizeStr ? Number(sizeStr) : 50;
-    return { type, pattern, maxFileSize };
+    const outputStr = localStorage.getItem(MAX_OUTPUT_SIZE_KEY);
+    const maxOutputSize = outputStr ? Number(outputStr) : 50; // default 50 MB (max 1024 MB = 1 GB)
+    return { type, pattern, maxFileSize, maxOutputSize };
   } catch {
-    return { type: 'exclude', pattern: '*.md, tests/, docs/', maxFileSize: 50 };
+    return { type: 'exclude', pattern: '*.md, tests/, docs/', maxFileSize: 50, maxOutputSize: 50 };
   }
 }
 
-export function savePatterns(type: 'exclude' | 'include', pattern: string, maxFileSize: number): void {
+export function savePatterns(type: 'exclude' | 'include', pattern: string, maxFileSize: number, maxOutputSize?: number): void {
   try {
     localStorage.setItem(PATTERN_TYPE_KEY, type);
     localStorage.setItem(PATTERN_VALUE_KEY, pattern);
     localStorage.setItem(MAX_FILE_SIZE_KEY, String(maxFileSize));
+    if (maxOutputSize !== undefined) {
+      localStorage.setItem(MAX_OUTPUT_SIZE_KEY, String(maxOutputSize));
+    }
   } catch (e) {
     console.error('Failed to persist patterns', e);
+  }
+}
+
+export function getSavedMaxOutputSize(): number {
+  try {
+    const outputStr = localStorage.getItem(MAX_OUTPUT_SIZE_KEY);
+    return outputStr ? Number(outputStr) : 50;
+  } catch {
+    return 50;
+  }
+}
+
+export function saveMaxOutputSize(mb: number): void {
+  try {
+    localStorage.setItem(MAX_OUTPUT_SIZE_KEY, String(mb));
+  } catch (e) {
+    console.error('Failed to save max output size', e);
   }
 }
 

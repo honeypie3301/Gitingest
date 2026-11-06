@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, ShieldCheck, Key, RefreshCw, ChevronDown, Lock, FolderGit2, XCircle, Check, Clock, X, Star } from 'lucide-react';
 import { IngestRequest, PatternType, TokenStatus } from '../types';
-import { getSavedPatterns, savePatterns, getSavedToken, getSavedDecompileClasses, saveDecompileClasses } from '../services/ingest';
+import { getSavedPatterns, savePatterns, getSavedToken, getSavedDecompileClasses, saveDecompileClasses, getSavedMaxOutputSize, saveMaxOutputSize } from '../services/ingest';
 import { fetchUserRepos, RepoSummary } from '../services/githubApi';
 import { IngestionTimer } from './IngestionTimer';
 import {
@@ -54,13 +54,21 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
   const [maxFileSize, setMaxFileSize] = useState(50); // In MB
   const [sizeUnit, setSizeUnit] = useState<SizeUnit>('MB');
   const [displaySize, setDisplaySize] = useState('50');
+
+  // Max Output Text File Size (Split threshold, max 1024 MB = 1 GB)
+  const [maxOutputSize, setMaxOutputSize] = useState(50); // In MB
+  const [outputUnit, setOutputUnit] = useState<SizeUnit>('MB');
+  const [displayOutputSize, setDisplayOutputSize] = useState('50');
+
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isUnitDropdownOpen, setIsUnitDropdownOpen] = useState(false);
+  const [isOutputUnitDropdownOpen, setIsOutputUnitDropdownOpen] = useState(false);
   const [isPatternHistoryOpen, setIsPatternHistoryOpen] = useState(false);
   const [patternFavorites, setPatternFavorites] = useState<PatternItem[]>([]);
   const [patternRecents, setPatternRecents] = useState<PatternItem[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const unitDropdownRef = useRef<HTMLDivElement>(null);
+  const outputUnitDropdownRef = useRef<HTMLDivElement>(null);
   const patternInputContainerRef = useRef<HTMLDivElement>(null);
 
   const [userRepos, setUserRepos] = useState<RepoSummary[]>([]);
@@ -76,6 +84,12 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
     setMaxFileSize(savedMb);
     setDisplaySize(String(savedMb));
     setSizeUnit('MB');
+
+    const savedOutMb = saved.maxOutputSize || getSavedMaxOutputSize() || 50;
+    setMaxOutputSize(savedOutMb);
+    setDisplayOutputSize(String(savedOutMb));
+    setOutputUnit('MB');
+
     setDecompileClasses(getSavedDecompileClasses());
     setRecentIngests(getRecentIngests());
 
@@ -93,6 +107,9 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
       }
       if (unitDropdownRef.current && !unitDropdownRef.current.contains(event.target as Node)) {
         setIsUnitDropdownOpen(false);
+      }
+      if (outputUnitDropdownRef.current && !outputUnitDropdownRef.current.contains(event.target as Node)) {
+        setIsOutputUnitDropdownOpen(false);
       }
       if (patternInputContainerRef.current && !patternInputContainerRef.current.contains(event.target as Node)) {
         setIsPatternHistoryOpen(false);
@@ -199,7 +216,33 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
 
   const handleFileSizeChange = (newSize: number) => {
     setMaxFileSize(newSize);
-    savePatterns(patternType, pattern, newSize);
+    savePatterns(patternType, pattern, newSize, maxOutputSize);
+  };
+
+  const handleOutputUnitChange = (newUnit: SizeUnit) => {
+    setOutputUnit(newUnit);
+    setIsOutputUnitDropdownOpen(false);
+    const converted = convertFromMb(maxOutputSize, newUnit);
+    setDisplayOutputSize(String(converted));
+  };
+
+  const handleOutputSizeInputChange = (rawVal: string) => {
+    setDisplayOutputSize(rawVal);
+    const num = parseFloat(rawVal);
+    if (!isNaN(num) && num > 0) {
+      const mb = Math.min(1024, Math.max(0.01, convertToMb(num, outputUnit)));
+      setMaxOutputSize(mb);
+      saveMaxOutputSize(mb);
+      savePatterns(patternType, pattern, maxFileSize, mb);
+    }
+  };
+
+  const handleOutputSliderChange = (sliderVal: number) => {
+    setDisplayOutputSize(String(sliderVal));
+    const mb = Math.min(1024, Math.max(0.01, convertToMb(sliderVal, outputUnit)));
+    setMaxOutputSize(mb);
+    saveMaxOutputSize(mb);
+    savePatterns(patternType, pattern, maxFileSize, mb);
   };
 
   const currentValNum = parseFloat(displaySize) || 1;
@@ -207,6 +250,12 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
   const defaultMax = sizeUnit === 'GB' ? 10 : sizeUnit === 'KB' ? 10240 : 500;
   const sliderMax = Math.max(defaultMax, Math.ceil(currentValNum * 1.2));
   const sliderStep = sizeUnit === 'GB' ? 0.1 : sizeUnit === 'KB' ? 10 : 1;
+
+  // Max Output Text File Slider (Capped at exactly 1 GB = 1024 MB)
+  const currentOutputValNum = parseFloat(displayOutputSize) || 1;
+  const outputSliderMin = outputUnit === 'GB' ? 0.01 : outputUnit === 'KB' ? 10 : 1;
+  const outputSliderMax = outputUnit === 'GB' ? 1 : outputUnit === 'KB' ? 1048576 : 1024;
+  const outputSliderStep = outputUnit === 'GB' ? 0.05 : outputUnit === 'KB' ? 100 : 1;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -592,7 +641,7 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
 
               {/* Max File Size Slider + Input + Unit Selector */}
               <div className="md:col-span-5 flex items-center justify-between gap-2 bg-[#0d1117] p-2 sm:p-2.5 rounded border-[3px] border-[#30363d] shadow-[2px_2px_0_0_#000000]">
-                <span className="text-[10px] sm:text-xs font-extrabold text-gray-300 uppercase tracking-wider whitespace-nowrap shrink-0">
+                <span className="text-[10px] sm:text-xs font-extrabold text-gray-300 uppercase tracking-wider whitespace-nowrap shrink-0" title="Maximum individual file size to include in the ingestion">
                   Max Size:
                 </span>
                 <input
@@ -633,6 +682,72 @@ export const GitForm: React.FC<GitFormProps> = React.memo(({
                             onClick={() => handleUnitChange(unit)}
                             className={`w-full text-left px-2 py-1 text-xs font-bold uppercase transition-colors ${
                               sizeUnit === unit
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : 'text-gray-300 hover:bg-[#21262d] hover:text-white'
+                            }`}
+                          >
+                            {unit}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Second Slider Row: Max Output Text File Size (Split threshold up to 1GB) */}
+            <div className="pt-2.5 pb-1 border-t border-[#30363d]/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 bg-[#0d1117]/60 p-2 sm:p-2.5 rounded-lg border border-[#30363d]">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[10px] sm:text-xs font-extrabold text-amber-400 uppercase tracking-wider whitespace-nowrap shrink-0">
+                  Max Output File Size:
+                </span>
+                <span className="hidden sm:inline text-[11px] text-gray-400">
+                  (Split text file if output exceeds this limit, max 1 GB)
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2.5 w-full sm:w-1/2 md:w-2/5 shrink-0 justify-end">
+                <input
+                  type="range"
+                  min={outputSliderMin}
+                  max={outputSliderMax}
+                  step={outputSliderStep}
+                  value={Math.min(outputSliderMax, Math.max(outputSliderMin, currentOutputValNum))}
+                  onChange={(e) => handleOutputSliderChange(Number(e.target.value))}
+                  className="w-full accent-amber-500 cursor-pointer"
+                  title="Configure max text file size (splits safely into multiple parts if exceeded, max 1 GB)"
+                />
+                <div className="flex items-center gap-1 shrink-0">
+                  <input
+                    type="number"
+                    min={outputSliderMin}
+                    max={outputSliderMax}
+                    step="any"
+                    value={displayOutputSize}
+                    onChange={(e) => handleOutputSizeInputChange(e.target.value)}
+                    className="w-14 sm:w-16 px-1.5 py-0.5 bg-[#161b22] border border-[#30363d] focus:border-amber-400 rounded text-center font-mono font-bold text-xs sm:text-sm text-amber-300 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                    title="Enter custom output file limit (up to 1 GB)"
+                  />
+                  <div className="relative" ref={outputUnitDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setIsOutputUnitDropdownOpen((prev) => !prev)}
+                      className="bg-[#1e242c] hover:bg-[#252d37] font-extrabold text-[10px] sm:text-xs uppercase px-1.5 py-1 border border-amber-500/50 rounded text-amber-300 flex items-center gap-0.5 focus:outline-none cursor-pointer transition-colors shadow-[1px_1px_0_0_#000000]"
+                      title="Switch unit: KB, MB, GB (max 1 GB)"
+                    >
+                      <span>{outputUnit}</span>
+                      <ChevronDown className={`w-3 h-3 transition-transform ${isOutputUnitDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOutputUnitDropdownOpen && (
+                      <div className="absolute right-0 top-full mt-1.5 w-16 bg-[#161b22] border-2 border-amber-500/80 rounded-lg shadow-[3px_3px_0_0_#000000] py-1 z-50 overflow-hidden">
+                        {(['KB', 'MB', 'GB'] as const).map((unit) => (
+                          <button
+                            key={unit}
+                            type="button"
+                            onClick={() => handleOutputUnitChange(unit)}
+                            className={`w-full text-left px-2 py-1 text-xs font-bold uppercase transition-colors ${
+                              outputUnit === unit
                                 ? 'bg-amber-500/20 text-amber-300'
                                 : 'text-gray-300 hover:bg-[#21262d] hover:text-white'
                             }`}

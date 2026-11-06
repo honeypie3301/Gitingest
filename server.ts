@@ -349,23 +349,30 @@ app.post('/api/ingest', async (req, res) => {
         const collectedFiles: Array<{ relPath: string; fullPath: string; size: number }> = [];
 
         function walkLocalDir(currentDir: string) {
-          const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          let entries: fs.Dirent[];
+          try {
+            entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          } catch {
+            return;
+          }
           for (const entry of entries) {
-            if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.venv') continue;
+            if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.venv' || entry.name === '$RECYCLE.BIN') continue;
             const full = path.join(currentDir, entry.name);
             const rel = path.relative(localRoot, full).replace(/\\/g, '/');
 
-            if (entry.isDirectory()) {
-              walkLocalDir(full);
-            } else if (entry.isFile()) {
-              if (!isPathAllowed(rel)) continue;
-              try {
-                const stat = fs.statSync(full);
-                if (stat.size <= maxBytes) {
-                  collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
-                }
-              } catch {}
-            }
+            try {
+              if (entry.isDirectory()) {
+                walkLocalDir(full);
+              } else if (entry.isFile()) {
+                if (!isPathAllowed(rel)) continue;
+                try {
+                  const stat = fs.statSync(full);
+                  if (stat.size <= maxBytes) {
+                    collectedFiles.push({ relPath: rel, fullPath: full, size: stat.size });
+                  }
+                } catch {}
+              }
+            } catch {}
           }
         }
 
@@ -376,10 +383,17 @@ app.post('/api/ingest', async (req, res) => {
 
         const fileContents: string[] = [];
         let totalChars = 0;
+        const MAX_LOCAL_DIGEST_CHARS = 40 * 1024 * 1024; // 40MB text limit to prevent Node OOM
+        let isLocalTruncated = false;
 
         for (const file of collectedFiles) {
+          if (totalChars >= MAX_LOCAL_DIGEST_CHARS) {
+            isLocalTruncated = true;
+            break;
+          }
           try {
             const buf = fs.readFileSync(file.fullPath);
+            if (buf.length > maxBytes) continue;
             let content: string;
             let fileHeader = file.relPath;
             if (file.relPath.toLowerCase().endsWith('.class')) {
@@ -401,15 +415,20 @@ app.post('/api/ingest', async (req, res) => {
           } catch {}
         }
 
+        if (isLocalTruncated) {
+          fileContents.push(`\n[Notice: Digest capped at 40MB for browser rendering stability. Use pattern filters for targeted ingestion.]\n`);
+        }
+
         const estimatedTokens = formatTokenCount(Math.round(totalChars / 4));
         const summary = [
           `Local Directory: ${localRoot}`,
           `Files analyzed: ${fileContents.length}`,
           `Estimated tokens: ${estimatedTokens}`,
           `Total characters: ${totalChars.toLocaleString()}`,
-        ].join('\n');
+          isLocalTruncated ? `(Digest capped at 40MB for stability)` : null,
+        ].filter(Boolean).join('\n');
 
-        return res.json({
+        const responsePayload = {
           summary,
           tree: `Directory structure:\n${treeText}`,
           content: fileContents.join('\n'),
@@ -418,7 +437,15 @@ app.post('/api/ingest', async (req, res) => {
           estimated_tokens: estimatedTokens,
           total_chars: totalChars,
           mode_info: 'Local Directory (Offline, 0 Network Calls)',
-        });
+        };
+
+        if (typeof global.gc === 'function') {
+          setImmediate(() => {
+            try { global.gc!(); } catch {}
+          });
+        }
+
+        return res.json(responsePayload);
       }
     } catch (err: any) {
       console.error('Local directory read error:', err);

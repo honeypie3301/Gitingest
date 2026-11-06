@@ -17,7 +17,7 @@ if errorlevel 1 (
 
 REM 3. Launch server with PM2 or Node fallback
 if exist "dist-server\server.mjs" (
-    call pm2 restart gitingest >nul 2>&1 || call pm2 start dist-server/server.mjs --name gitingest --node-args="--expose-gc --max-old-space-size=512" >nul 2>&1 || goto fallback
+    call pm2 restart gitingest >nul 2>&1 || call pm2 start dist-server/server.mjs --name gitingest --node-args="--expose-gc --max-old-space-size=2048" >nul 2>&1 || goto fallback
     echo GitIngest server started in the background at http://localhost:3000
     for /f "tokens=*" %%a in ('git log -1 --oneline') do echo Latest Commit: %%a
     goto end
@@ -26,7 +26,7 @@ if exist "dist-server\server.mjs" (
 :fallback
 echo Starting GitIngest server at http://localhost:3000...
 if exist "dist-server\server.mjs" (
-    node --expose-gc --max-old-space-size=512 dist-server/server.mjs
+    node --expose-gc --max-old-space-size=2048 dist-server/server.mjs
 ) else (
     call npx tsx server.ts
 )

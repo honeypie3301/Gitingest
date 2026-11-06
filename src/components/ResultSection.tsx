@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer, AlertCircle } from 'lucide-react';
+import { Copy, Check, Download, FolderTree, FileText, BarChart3, Hash, Cpu, XCircle, Timer, AlertCircle, FileArchive, Layers } from 'lucide-react';
 import { IngestResponse } from '../types';
 import { IngestionTimer, formatDuration } from './IngestionTimer';
 import { artifactUrl, fullDigestSection } from '../services/digestExport';
+import { splitDigestSafely, downloadSplitPartsAsZip, SplitPart } from '../services/textSplitter';
+import { getSavedMaxOutputSize } from '../services/ingest';
 
 // Threshold above which we avoid mounting a single giant string into a DOM textarea to prevent tab crashes
 const MAX_PREVIEW_CHARS = 200_000; // ~200k chars for preview (~50k tokens)
@@ -33,6 +35,22 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
 }) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [isSplittingDownload, setIsSplittingDownload] = useState(false);
+
+  const splitInfo = useMemo(() => {
+    if (!result) return null;
+    const maxOutputMb = getSavedMaxOutputSize();
+    const maxOutputBytes = maxOutputMb * 1024 * 1024;
+    const fullText = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
+    const baseFilename = getDownloadFilename();
+    const parts = splitDigestSafely(fullText, maxOutputBytes, baseFilename);
+    return {
+      isSplit: parts.length > 1,
+      totalParts: parts.length,
+      parts,
+      maxOutputMb,
+    };
+  }, [result]);
   useEffect(() => {
     setActionError(null);
   }, [result]);
@@ -97,26 +115,41 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
   const handleDownload = async () => {
     if (!result) return;
     const filename = getDownloadFilename();
-    if (result.artifact_url) {
-      const link = document.createElement('a');
-      try { link.href = await artifactUrl(result); }
-      catch (error: any) { setActionError(error.message); return; }
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      return;
+    const maxOutputMb = getSavedMaxOutputSize();
+    const maxOutputBytes = maxOutputMb * 1024 * 1024;
+
+    try {
+      setIsSplittingDownload(true);
+      let fullText: string;
+      if (result.artifact_url) {
+        fullText = await fullDigestSection(result, 'all');
+      } else {
+        fullText = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
+      }
+
+      const parts = splitDigestSafely(fullText, maxOutputBytes, filename);
+
+      if (parts.length > 1) {
+        // Output text file size exceeds user threshold: split into safe parts inside a zip package
+        const zipFilename = filename.replace(/\.txt$/i, '') + `_split_${parts.length}_parts.zip`;
+        await downloadSplitPartsAsZip(parts, zipFilename);
+      } else {
+        // Single file within max output threshold
+        const blob = new Blob([parts[0].content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = parts[0].filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
+      setActionError(err.message || 'Download failed');
+    } finally {
+      setIsSplittingDownload(false);
     }
-    const fullText = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
-    const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   if (isLoading) {
@@ -226,14 +259,30 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
 
           <button
             onClick={handleDownload}
-            className="h-full py-2.5 px-3 bg-[#21262d] hover:bg-[#30363d] border-2 border-[#30363d] text-white font-bold rounded-xl text-xs sm:text-sm transition-transform active:translate-y-0.5 shadow-[2px_2px_0_0_#000000] flex items-center justify-center gap-1.5 cursor-pointer"
-            title="Download full digest as .txt file"
+            disabled={isSplittingDownload}
+            className="h-full py-2.5 px-3 bg-[#21262d] hover:bg-[#30363d] disabled:opacity-50 border-2 border-[#30363d] text-white font-bold rounded-xl text-xs sm:text-sm transition-transform active:translate-y-0.5 shadow-[2px_2px_0_0_#000000] flex items-center justify-center gap-1.5 cursor-pointer"
+            title={splitInfo?.isSplit ? `Download ${splitInfo.totalParts} split text files in .zip package` : "Download full digest as .txt file"}
           >
-            <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Download</span>
+            {splitInfo?.isSplit ? <FileArchive className="w-4 h-4 text-amber-400" /> : <Download className="w-4 h-4" />}
+            <span className="hidden sm:inline">
+              {isSplittingDownload
+                ? 'Packaging...'
+                : splitInfo?.isSplit
+                ? `Download (${splitInfo.totalParts} parts)`
+                : 'Download'}
+            </span>
           </button>
         </div>
       </div>
+
+      {splitInfo?.isSplit && (
+        <div className="bg-sky-500/10 border-2 border-sky-500/40 rounded-xl px-4 py-2.5 text-xs font-mono text-sky-200 shadow-[2px_2px_0_0_#000000] flex items-center gap-2.5">
+          <Layers className="w-4 h-4 text-sky-400 shrink-0" />
+          <div>
+            <strong className="text-sky-300">Auto-Split Active:</strong> Total digest exceeds your configured <strong>{splitInfo.maxOutputMb} MB</strong> max text file limit. Content will be safely partitioned into <strong>{splitInfo.totalParts} text files</strong> (packaged as a .zip) along file boundaries without truncating code.
+          </div>
+        </div>
+      )}
 
       {(result.mode_switched || (typeof window !== 'undefined' && localStorage.getItem('gitingest_fallback_active') === 'true')) && (
         <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-xl px-4 py-3 text-xs font-mono text-amber-300 shadow-[2px_2px_0_0_#000000] flex items-center justify-between gap-2.5">
