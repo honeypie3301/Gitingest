@@ -1464,9 +1464,9 @@ async function startServer() {
   } catch {
   }
   const distPath = path.join(process.cwd(), "dist");
-  const isProd = process.env.NODE_ENV === "production";
+  const isExplicitDev = process.env.NODE_ENV === "development";
   const hasDist = fs.existsSync(path.join(distPath, "index.html"));
-  if (isProd && hasDist) {
+  if (!isExplicitDev && hasDist) {
     app.use(express.static(distPath, { maxAge: "1d" }));
     app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

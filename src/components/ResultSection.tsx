@@ -41,13 +41,12 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
     if (!result) return null;
     const maxOutputMb = getSavedMaxOutputSize();
     const maxOutputBytes = maxOutputMb * 1024 * 1024;
-    const fullText = `${result.summary}\n\n${result.tree}\n\n${result.content}`;
-    const baseFilename = getDownloadFilename();
-    const parts = splitDigestSafely(fullText, maxOutputBytes, baseFilename);
+    // Lightweight estimation based on character count / content length to avoid main-thread freeze
+    const totalLength = (result.total_chars ?? 0) || ((result.summary?.length ?? 0) + (result.tree?.length ?? 0) + (result.content?.length ?? 0));
+    const estimatedParts = Math.max(1, Math.ceil(totalLength / maxOutputBytes));
     return {
-      isSplit: parts.length > 1,
-      totalParts: parts.length,
-      parts,
+      isSplit: estimatedParts > 1,
+      estimatedParts,
       maxOutputMb,
     };
   }, [result]);
@@ -268,7 +267,7 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
               {isSplittingDownload
                 ? 'Packaging...'
                 : splitInfo?.isSplit
-                ? `Download (${splitInfo.totalParts} parts)`
+                ? `Download (~${splitInfo.estimatedParts} parts)`
                 : 'Download'}
             </span>
           </button>
@@ -279,7 +278,7 @@ export const ResultSection: React.FC<ResultSectionProps> = React.memo(({
         <div className="bg-sky-500/10 border-2 border-sky-500/40 rounded-xl px-4 py-2.5 text-xs font-mono text-sky-200 shadow-[2px_2px_0_0_#000000] flex items-center gap-2.5">
           <Layers className="w-4 h-4 text-sky-400 shrink-0" />
           <div>
-            <strong className="text-sky-300">Auto-Split Active:</strong> Total digest exceeds your configured <strong>{splitInfo.maxOutputMb} MB</strong> max text file limit. Content will be safely partitioned into <strong>{splitInfo.totalParts} text files</strong> (packaged as a .zip) along file boundaries without truncating code.
+            <strong className="text-sky-300">Auto-Split Active:</strong> Total digest exceeds your configured <strong>{splitInfo.maxOutputMb} MB</strong> limit. Content will be safely partitioned into approximately <strong>{splitInfo.estimatedParts} text files</strong> (packaged as a .zip) along file boundaries without truncating code.
           </div>
         </div>
       )}
