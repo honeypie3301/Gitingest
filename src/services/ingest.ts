@@ -327,5 +327,27 @@ export async function performIngest(request: IngestRequest, signal?: AbortSignal
     }
   }
 
+  // Local paths cannot be ingested via the client-side GitHub API — they must go through the server.
+  // If the server failed on a local path, surface the error directly instead of falling back.
+  if (isLocalPath(request.input_text)) {
+    throw new Error(
+      'Local path ingestion requires the server to be running. ' +
+      'Make sure the backend is reachable and try again.'
+    );
+  }
+
   return await ingestViaGitHubApi(payload, tokenToUse, signal);
+}
+
+/** Returns true if the input looks like a local filesystem path (Windows or Unix). */
+export function isLocalPath(input: string): boolean {
+  if (!input) return false;
+  const trimmed = input.trim();
+  // Windows absolute paths: C:\... or C:/...
+  if (/^[a-zA-Z]:[/\\]/.test(trimmed)) return true;
+  // Unix/macOS absolute paths
+  if (trimmed.startsWith('/')) return true;
+  // Relative paths starting with ./ or ../
+  if (/^\.\.?[/\\]/.test(trimmed)) return true;
+  return false;
 }

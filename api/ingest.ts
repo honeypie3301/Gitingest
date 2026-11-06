@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ArchiveDownloadError, downloadArchive, ingestArchive } from '../worker/archive';
 import { parseGitHubUrl } from '../src/services/ingestFormatting';
+import { isLocalPath } from '../src/services/ingest';
 import { checkOwnerAuth } from '../lib/owner-auth';
 import { submitWorkerJob } from '../lib/worker-proxy';
 import { GitHubRateLimitError, githubRateLimitMessage } from '../src/services/githubRateLimit';
@@ -37,11 +38,18 @@ export default async function handler(req: any, res: any) {
   res.on?.('close', () => { if (!res.writableEnded) controller.abort(); });
 
   const parsed = parseGitHubUrl(input_text);
-  if (!parsed) {
+  if (!parsed && !isLocalPath(input_text)) {
     return res.status(400).json({ error: 'Invalid URL. Expected format: owner/repo or https://github.com/owner/repo' });
   }
 
-  const { owner, repo } = parsed;
+  // Local paths cannot be processed by this Node.js handler; they must go through the Python server.
+  if (!parsed && isLocalPath(input_text)) {
+    return res.status(400).json({
+      error: 'Local path ingestion is only supported through the Python backend. Make sure the Python server is running and reachable.',
+    });
+  }
+
+  const { owner, repo } = parsed!;
   const activeToken = (bearerToken || token || process.env.GITHUB_TOKEN || '').trim();
 
   const headers: Record<string, string> = {

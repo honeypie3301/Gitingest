@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from gitingest.clone import clone_repo
 from gitingest.ingestion import ingest_query
-from gitingest.query_parser import parse_remote_repo
+from gitingest.query_parser import parse_local_dir_path, parse_remote_repo
 from gitingest.utils.git_utils import resolve_commit, validate_github_token
 from gitingest.utils.logging_config import get_logger
 from gitingest.utils.pattern_utils import process_patterns
@@ -265,11 +265,48 @@ async def process_query(
     if token:
         validate_github_token(token)
 
+    # Detect local filesystem paths (Windows absolute: C:\..., Unix: /...)
+    is_local = _is_local_path(input_text)
+
     try:
-        query = await parse_remote_repo(input_text, token=token)
+        if is_local:
+            query = parse_local_dir_path(input_text)
+        else:
+            query = await parse_remote_repo(input_text, token=token)
     except Exception as exc:
-        logger.warning("Failed to parse remote repository", extra={"input_text": input_text, "error": str(exc)})
+        logger.warning("Failed to parse repository", extra={"input_text": input_text, "error": str(exc)})
         return IngestErrorResponse(error=str(exc))
+
+    if is_local:
+        # Local path ingestion: ingest directly without cloning
+        query.max_file_size = max_file_size * 1024
+        query.ignore_patterns, query.include_patterns = process_patterns(
+            exclude_patterns=pattern if pattern_type == PatternType.EXCLUDE else None,
+            include_patterns=pattern if pattern_type == PatternType.INCLUDE else None,
+        )
+        try:
+            summary, tree, content = ingest_query(query)
+        except Exception as exc:
+            logger.error("Local path ingestion failed", extra={"input_text": input_text, "error": str(exc)})
+            return IngestErrorResponse(error=str(exc))
+
+        if len(content) > MAX_DISPLAY_SIZE:
+            content = (
+                f"(Files content cropped to {int(MAX_DISPLAY_SIZE / 1_000)}k characters, "
+                "download full ingest to see more)\n" + content[:MAX_DISPLAY_SIZE]
+            )
+
+        return IngestSuccessResponse(
+            repo_url=input_text,
+            short_repo_url=query.slug,
+            summary=summary,
+            digest_url="",
+            tree=tree,
+            content=content,
+            default_max_file_size=max_file_size,
+            pattern_type=pattern_type,
+            pattern=pattern,
+        )
 
     query.url = cast("str", query.url)
     query.max_file_size = max_file_size * 1024  # Convert to bytes since we currently use KB in higher levels
@@ -427,3 +464,25 @@ def _print_success(url: str, max_file_size: int, pattern_type: str, pattern: str
             "estimated_tokens": estimated_tokens,
         },
     )
+
+
+def _is_local_path(source: str) -> bool:
+    """Return True if *source* looks like a local filesystem path rather than a remote URL or slug.
+
+    Handles:
+    - Windows absolute paths: ``C:\\...`` or ``C:/...``
+    - Unix/macOS absolute paths: ``/...``
+    - Relative paths: ``./...`` or ``../...``
+    """
+    import re
+    s = source.strip()
+    # Windows absolute path: starts with a drive letter followed by colon and slash/backslash
+    if re.match(r"^[a-zA-Z]:[/\\]", s):
+        return True
+    # Unix absolute path
+    if s.startswith("/"):
+        return True
+    # Relative path
+    if re.match(r"^\.\.?[/\\]", s) or s in (".", ".."):
+        return True
+    return False
