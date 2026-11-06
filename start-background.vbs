@@ -1,14 +1,11 @@
-' GitIngest Background Silent Launcher
+' GitIngest Background Silent Launcher (Path Dynamic)
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 projectDir = fso.GetParentFolderName(WScript.ScriptFullName)
 WshShell.CurrentDirectory = projectDir
 
 serverFile = projectDir & "\dist-server\server.mjs"
-nodeExe = "C:\Program Files\nodejs\node.exe"
-If Not fso.FileExists(nodeExe) Then
-  nodeExe = "node"
-End If
+nodeExe = "C:\\Program Files\\nodejs\\node.exe"
 
 If Not fso.FileExists(serverFile) Then
   WshShell.Run "cmd.exe /c npm run build", 0, True
